@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FileProof — Lưu bản gốc. Chia sẻ bằng chứng.</title>
+<link rel="stylesheet" href="/css/style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/"><div class="nav-pip"></div>FileProof</a>
+  <div class="nav-links">
+    <a href="/verify.html" class="nav-hide-mobile">Verify</a>
+    <a href="/explore.html" class="nav-hide-mobile">Explore</a>
+    <div id="nav-user" style="display:flex;gap:10px;align-items:center"></div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero-split" style="display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid var(--border);min-height:460px">
+  <div class="hero-text" style="padding:64px 40px;border-right:1px solid var(--border);display:flex;flex-direction:column;justify-content:center">
+    <div class="badge badge-green mb-2" style="width:fit-content">
+      <span class="badge-pip" style="animation:pulse 2s infinite"></span>
+      Decentralized storage — always available
+    </div>
+    <h1 class="hero-h1 serif" style="font-size:50px;line-height:1.05;letter-spacing:-1px;margin-bottom:18px">
+      Lưu bản gốc.<br><em>Chia sẻ</em><br>bằng chứng.
+    </h1>
+    <p style="font-size:16px;color:var(--muted);line-height:1.7;max-width:400px;margin-bottom:32px">
+      FileProof giúp bạn lưu bản gốc của file quan trọng, tạo trang proof có thể chia sẻ, và kiểm chứng xem một file bất kỳ có khớp với bản gốc hay không.
+    </p>
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <a href="/create.html" class="btn btn-primary"><i class="ti ti-shield-check"></i> Tạo Proof</a>
+      <a href="/verify.html" class="btn btn-secondary"><i class="ti ti-fingerprint"></i> Verify File</a>
+      <a href="/explore.html" class="btn btn-secondary"><i class="ti ti-compass"></i> Explore</a>
+    </div>
+  </div>
+  <div class="hero-split-right" style="display:flex;align-items:center;justify-content:center;padding:32px;background:var(--surface)">
+    <div class="card" style="width:100%;max-width:290px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+        <span style="font-size:13px;font-weight:500">flood-video.mp4</span>
+        <span class="badge badge-green"><span class="badge-pip"></span>Verified</span>
+      </div>
+      <div style="background:var(--surface);border-radius:var(--radius);height:80px;display:flex;align-items:center;justify-content:center;font-size:30px;margin-bottom:14px">🎬</div>
+      <div style="font-size:12px;display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between"><span class="text-muted">Preserved</span><span class="mono" style="font-size:11px">May 18, 2026</span></div>
+        <div style="display:flex;justify-content:space-between"><span class="text-muted">Size</span><span class="mono" style="font-size:11px">42.8 MB</span></div>
+        <div style="display:flex;justify-content:space-between"><span class="text-muted">Proof ID</span><span class="mono" style="font-size:11px">fp_abc123</span></div>
+      </div>
+      <div class="hash-box mb-2">
+        <div class="hash-label">SHA-256</div>
+        <div class="hash-value">9f2a7cb2e4f1...82c1d</div>
+      </div>
+      <button class="btn btn-accent w-full btn-sm">Verify this file</button>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section class="features-3col" style="display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid var(--border)">
+  <div style="padding:36px;border-right:1px solid var(--border)">
+    <div style="width:36px;height:36px;border-radius:8px;background:var(--accent-bg);display:flex;align-items:center;justify-content:center;margin-bottom:16px">
+      <i class="ti ti-archive" style="color:var(--accent);font-size:18px"></i>
+    </div>
+    <h3 style="font-size:15px;margin-bottom:8px">Preserve the original</h3>
+    <p class="text-muted text-sm">Upload bất kỳ file nào. Bản gốc được lưu an toàn và tạo fingerprint SHA-256 duy nhất.</p>
+  </div>
+  <div style="padding:36px;border-right:1px solid var(--border)">
+    <div style="width:36px;height:36px;border-radius:8px;background:var(--amber-bg);display:flex;align-items:center;justify-content:center;margin-bottom:16px">
+      <i class="ti ti-link" style="color:var(--amber);font-size:18px"></i>
+    </div>
+    <h3 style="font-size:15px;margin-bottom:8px">Share verifiable proof</h3>
+    <p class="text-muted text-sm">Nhận link proof page. Ai cũng có thể mở, xem file gốc, và đọc thông tin kiểm chứng.</p>
+  </div>
+  <div style="padding:36px">
+    <div style="width:36px;height:36px;border-radius:8px;background:var(--red-bg);display:flex;align-items:center;justify-content:center;margin-bottom:16px">
+      <i class="ti ti-fingerprint" style="color:var(--red);font-size:18px"></i>
+    </div>
+    <h3 style="font-size:15px;margin-bottom:8px">Verify any copy</h3>
+    <p class="text-muted text-sm">Upload bất kỳ bản sao nào. FileProof so sánh và báo file đó có khớp bản gốc không.</p>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section style="padding:48px 24px;border-bottom:1px solid var(--border)">
+  <h2 class="serif" style="font-size:28px;text-align:center;margin-bottom:36px">Cách hoạt động</h2>
+  <div class="how-4col" style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden">
+    <div style="padding:24px;border-right:1px solid var(--border)">
+      <div class="mono text-muted text-xs mb-1">01</div>
+      <h3 style="font-size:14px;margin-bottom:8px">Upload file</h3>
+      <p class="text-muted text-sm">Chọn file quan trọng. Hỗ trợ video, ảnh, PDF, audio, document, ZIP.</p>
+    </div>
+    <div style="padding:24px;border-right:1px solid var(--border)">
+      <div class="mono text-muted text-xs mb-1">02</div>
+      <h3 style="font-size:14px;margin-bottom:8px">Tạo fingerprint</h3>
+      <p class="text-muted text-sm">App tính SHA-256 hash trong browser. File upload lên server lưu trữ.</p>
+    </div>
+    <div style="padding:24px;border-right:1px solid var(--border)">
+      <div class="mono text-muted text-xs mb-1">03</div>
+      <h3 style="font-size:14px;margin-bottom:8px">Proof page</h3>
+      <p class="text-muted text-sm">Nhận link proof page với metadata đầy đủ và trạng thái verified.</p>
+    </div>
+    <div style="padding:24px">
+      <div class="mono text-muted text-xs mb-1">04</div>
+      <h3 style="font-size:14px;margin-bottom:8px">Ai cũng verify được</h3>
+      <p class="text-muted text-sm">Người nhận link có thể verify file của họ, so sánh với bản gốc.</p>
+    </div>
+  </div>
+</section>
+
+<!-- RECENT PROOFS -->
+<div id="recent-proofs" style="padding:0">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 24px;border-bottom:1px solid var(--border);background:var(--surface)">
+    <span class="text-muted text-sm">Recent public proofs</span>
+    <a href="/explore.html" class="text-sm" style="color:var(--accent)">Xem tất cả →</a>
+  </div>
+  <div id="proof-grid" class="proof-grid"></div>
+</div>
+
+<footer class="site-footer">
+  <div style="font-family:'DM Serif Display',serif;font-size:16px">FileProof</div>
+  <div style="display:flex;gap:16px;flex-wrap:wrap">
+    <a href="/verify.html" class="text-muted">Verify</a>
+    <a href="/explore.html" class="text-muted">Explore</a>
+    <a href="#" class="text-muted">Privacy</a>
+  </div>
+  <div class="mono text-xs text-muted">preserve · share · verify</div>
+</footer>
+
+<script src="/js/app.js"></script>
+<script>
+api('/proofs?limit=6').then(data => {
+  const grid = el('proof-grid');
+  if (!data.proofs || !data.proofs.length) {
+    grid.innerHTML = `<div style="padding:40px;text-align:center;color:var(--muted);grid-column:1/-1">Chưa có proof nào. <a href="/create.html" style="color:var(--accent)">Tạo proof đầu tiên →</a></div>`;
+    return;
+  }
+  grid.innerHTML = data.proofs.map(p => `
+    <div class="proof-grid-item" onclick="location.href='/proof.html?id=${p.id}'">
+      <div class="proof-thumb">${fileIcon(p.file_type)}</div>
+      <div class="proof-thumb-title">${p.title}</div>
+      <div class="proof-thumb-meta">${p.file_type?.split('/')[1] || 'file'} · ${formatBytes(p.file_size)}</div>
+      <div class="mt-1"><span class="badge badge-green"><span class="badge-pip"></span>Verified</span></div>
+    </div>
+  `).join('');
+}).catch(() => {});
+</script>
+</body>
+</html>

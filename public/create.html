@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tạo Proof — FileProof</title>
+<link rel="stylesheet" href="/css/style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/"><div class="nav-pip"></div>FileProof</a>
+  <div class="nav-links">
+    <a href="/" class="nav-hide-mobile">← Trang chủ</a>
+    <div id="nav-user" style="display:flex;gap:10px;align-items:center"></div>
+  </div>
+</nav>
+
+<div class="steps-bar" id="steps-bar">
+  <div class="step-tab active" id="tab-1"><span class="step-num">1</span> Upload file</div>
+  <div class="step-tab" id="tab-2"><span class="step-num">2</span> Thông tin</div>
+  <div class="step-tab" id="tab-3"><span class="step-num">3</span> Xác nhận</div>
+</div>
+
+<div class="layout-split">
+  <div class="layout-main">
+    <div id="alert-box"></div>
+
+    <!-- STEP 1 -->
+    <div id="step-1">
+      <h2 style="font-size:20px;margin-bottom:6px">Chọn file cần preserve</h2>
+      <p class="text-muted text-sm mb-3">Hỗ trợ mọi định dạng file. Tối đa 200 MB.</p>
+      <div class="drop-zone" id="drop-zone" onclick="el('file-input').click()">
+        <div class="drop-zone-icon"><i class="ti ti-cloud-upload"></i></div>
+        <div class="drop-zone-title">Kéo thả file vào đây</div>
+        <div class="drop-zone-sub">hoặc click để chọn file</div>
+      </div>
+      <input type="file" id="file-input" style="display:none">
+      <div id="file-preview" style="display:none" class="card mt-2">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+          <div style="display:flex;gap:14px;align-items:center;min-width:0">
+            <div id="preview-icon" style="font-size:32px;flex-shrink:0"></div>
+            <div style="min-width:0">
+              <div id="preview-name" style="font-size:14px;font-weight:500;margin-bottom:3px;word-break:break-all"></div>
+              <div id="preview-meta" class="text-muted text-sm"></div>
+            </div>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="clearFile()" style="flex-shrink:0"><i class="ti ti-x"></i></button>
+        </div>
+        <div id="img-preview-wrap" style="display:none;margin-top:14px">
+          <img id="img-preview" style="max-width:100%;max-height:200px;border-radius:var(--radius);object-fit:contain">
+        </div>
+        <div style="margin-top:14px">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+            <span class="text-muted" id="hash-status">Đang tính fingerprint...</span>
+            <span id="hash-pct" class="mono" style="color:var(--accent)"></span>
+          </div>
+          <div class="progress-bar"><div class="progress-fill" id="hash-progress" style="width:0%"></div></div>
+        </div>
+        <div class="hash-box mt-2" id="hash-box" style="display:none">
+          <div class="hash-label">SHA-256 fingerprint</div>
+          <div class="hash-value" id="hash-value"></div>
+        </div>
+      </div>
+      <button class="btn btn-primary mt-3" id="btn-next-1" disabled onclick="goStep(2)">Tiếp theo <i class="ti ti-arrow-right"></i></button>
+    </div>
+
+    <!-- STEP 2 -->
+    <div id="step-2" style="display:none">
+      <h2 style="font-size:20px;margin-bottom:6px">Thông tin proof</h2>
+      <p class="text-muted text-sm mb-3">Mô tả file giúp người khác hiểu và tìm thấy proof của bạn.</p>
+      <div class="form-group"><label>Tiêu đề *</label><input type="text" id="f-title" placeholder="Vd: Lũ lụt đường Nguyễn Hữu Cảnh, TP.HCM"></div>
+      <div class="form-group"><label>Mô tả</label><textarea id="f-desc" placeholder="Mô tả ngắn về nội dung file và bối cảnh..."></textarea></div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Danh mục</label>
+          <select id="f-category">
+            <option value="">Chọn danh mục</option>
+            <option>Disaster report</option><option>Legal document</option><option>Research</option>
+            <option>Journalism</option><option>Community report</option><option>Personal record</option><option>Other</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Visibility</label>
+          <select id="f-visibility">
+            <option value="public">Public — ai cũng thấy</option>
+            <option value="unlisted">Unlisted — chỉ ai có link</option>
+            <option value="private">Private — chỉ mình tôi</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Ngày sự kiện</label><input type="date" id="f-event-date"></div>
+        <div class="form-group"><label>Địa điểm (tùy chọn)</label><input type="text" id="f-location" placeholder="Vd: Quận 1, TP.HCM"></div>
+      </div>
+      <div class="form-group"><label>Tags (cách nhau bằng dấu phẩy)</label><input type="text" id="f-tags" placeholder="flood, hcmc, community-report"></div>
+      <div class="form-group"><label>Thêm vào collection (tùy chọn)</label><select id="f-collection"><option value="">Không thêm vào collection</option></select></div>
+      <div class="form-group">
+        <label>Đăng với tư cách</label>
+        <select id="f-submitter"><option value="anonymous">Anonymous</option><option value="account">Tài khoản của tôi</option></select>
+      </div>
+      <div style="display:flex;gap:12px;margin-top:20px;flex-wrap:wrap">
+        <button class="btn btn-secondary" onclick="goStep(1)">← Quay lại</button>
+        <button class="btn btn-primary" onclick="goStep(3)">Xem lại & tạo <i class="ti ti-arrow-right"></i></button>
+      </div>
+    </div>
+
+    <!-- STEP 3 -->
+    <div id="step-3" style="display:none">
+      <h2 style="font-size:20px;margin-bottom:6px">Xác nhận và tạo proof</h2>
+      <p class="text-muted text-sm mb-3">Kiểm tra lại thông tin trước khi tạo proof.</p>
+      <div class="card mb-2">
+        <div style="display:flex;gap:14px;align-items:center;margin-bottom:14px">
+          <div id="confirm-icon" style="font-size:28px;flex-shrink:0"></div>
+          <div style="min-width:0">
+            <div id="confirm-title" style="font-size:15px;font-weight:500;word-break:break-all"></div>
+            <div id="confirm-meta" class="text-muted text-sm"></div>
+          </div>
+        </div>
+        <div class="hash-box"><div class="hash-label">SHA-256 fingerprint</div><div class="hash-value" id="confirm-hash"></div></div>
+      </div>
+      <div class="card mb-3">
+        <table style="width:100%;font-size:13px;border-collapse:collapse">
+          <tr><td class="text-muted" style="padding:6px 0;width:130px">Tiêu đề</td><td id="c-title" style="padding:6px 0"></td></tr>
+          <tr><td class="text-muted" style="padding:6px 0">Danh mục</td><td id="c-category" style="padding:6px 0"></td></tr>
+          <tr><td class="text-muted" style="padding:6px 0">Visibility</td><td id="c-visibility" style="padding:6px 0"></td></tr>
+          <tr><td class="text-muted" style="padding:6px 0">Đăng với tư cách</td><td id="c-submitter" style="padding:6px 0"></td></tr>
+          <tr><td class="text-muted" style="padding:6px 0">Địa điểm</td><td id="c-location" style="padding:6px 0"></td></tr>
+        </table>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <button class="btn btn-secondary" onclick="goStep(2)">← Sửa lại</button>
+        <button class="btn btn-accent" id="btn-submit" onclick="submitProof()"><i class="ti ti-shield-check"></i> Tạo Proof</button>
+      </div>
+      <div id="upload-progress" style="display:none;margin-top:20px">
+        <div class="text-sm text-muted mb-1" id="upload-status">Đang tải lên...</div>
+        <div class="progress-bar"><div class="progress-fill" id="upload-bar" style="width:5%"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SIDEBAR -->
+  <div class="layout-side">
+    <div style="font-size:13px;font-weight:500;margin-bottom:16px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Tóm tắt</div>
+    <div id="side-empty" class="text-muted text-sm">Chưa có file nào được chọn.</div>
+    <div id="side-info" style="display:none">
+      <div class="card card-sm mb-2">
+        <div class="text-muted text-xs mb-1">File</div>
+        <div id="side-filename" style="font-size:14px;font-weight:500;word-break:break-all"></div>
+        <div id="side-filesize" class="text-muted text-xs mt-1"></div>
+      </div>
+      <div class="hash-box mb-2">
+        <div class="hash-label">SHA-256</div>
+        <div class="hash-value" id="side-hash">đang tính...</div>
+      </div>
+      <div class="card card-sm" style="font-size:12px;color:var(--muted);line-height:1.6">FileProof lưu bản gốc và tạo fingerprint để bất kỳ ai cũng có thể kiểm chứng sau này.</div>
+    </div>
+    <div class="divider"></div>
+    <div style="font-size:13px;font-weight:500;margin-bottom:12px;color:var(--muted)">Lưu ý</div>
+    <ul style="font-size:12px;color:var(--muted);line-height:1.8;padding-left:16px">
+      <li>Bản gốc sẽ được lưu trên server.</li>
+      <li>SHA-256 fingerprint được tính trong browser.</li>
+      <li>Bạn có thể xóa proof bất cứ lúc nào.</li>
+      <li>Public proofs có thể tìm kiếm được.</li>
+    </ul>
+  </div>
+</div>
+
+<script src="/js/app.js"></script>
+<script src="/js/create.js"></script>
+</body>
+</html>

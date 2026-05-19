@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Proof — FileProof</title>
+<link rel="stylesheet" href="/css/style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/"><div class="nav-pip"></div>FileProof</a>
+  <div class="nav-links">
+    <a href="/explore.html" class="nav-hide-mobile">Explore</a>
+    <div id="nav-user" style="display:flex;gap:10px;align-items:center"></div>
+  </div>
+</nav>
+
+<div id="proof-loading" style="padding:80px;text-align:center;color:var(--muted)">
+  <div class="spinner" style="width:28px;height:28px;margin:0 auto 12px"></div>
+  <div>Đang tải proof...</div>
+</div>
+
+<div id="proof-error" style="display:none;padding:80px;text-align:center">
+  <div style="font-size:36px;margin-bottom:12px">🔒</div>
+  <div style="font-size:18px;font-weight:500;margin-bottom:8px" id="error-title">Không tìm thấy</div>
+  <div class="text-muted" id="error-msg"></div>
+</div>
+
+<div id="proof-content" style="display:none">
+  <div style="border-bottom:1px solid var(--border);padding:18px 24px">
+    <div class="proof-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px">
+      <div style="min-width:0">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap">
+          <span class="badge badge-green" id="proof-status-badge"><span class="badge-pip"></span>Verified</span>
+          <span class="badge badge-gray" id="proof-category-badge" style="display:none"></span>
+        </div>
+        <h1 id="proof-title" style="font-size:20px;font-weight:500;margin-bottom:6px;word-break:break-word"></h1>
+        <div class="text-muted text-sm" id="proof-meta"></div>
+      </div>
+      <div class="proof-header-actions" style="display:flex;gap:8px;flex-shrink:0;flex-wrap:wrap">
+        <button class="btn btn-secondary btn-sm" id="btn-copy-link" onclick="copyLink()"><i class="ti ti-copy"></i> Copy link</button>
+        <a class="btn btn-primary btn-sm" id="btn-download"><i class="ti ti-download"></i> Tải về</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="layout-split">
+    <div class="layout-main">
+      <div id="media-container" style="margin-bottom:24px"></div>
+      <div id="alert-verify"></div>
+
+      <div class="card mb-3">
+        <div style="font-size:14px;font-weight:500;margin-bottom:14px;display:flex;align-items:center;gap:8px">
+          <i class="ti ti-fingerprint" style="color:var(--accent)"></i> Verify proof này
+        </div>
+        <p class="text-muted text-sm mb-2">Bạn có thể kiểm tra xem file bạn có có khớp với bản gốc đã preserved hay không.</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn btn-accent btn-sm" onclick="verifyServer()"><i class="ti ti-shield-check"></i> Verify file từ server</button>
+          <button class="btn btn-secondary btn-sm" onclick="el('verify-upload').click()"><i class="ti ti-upload"></i> Upload file để so sánh</button>
+        </div>
+        <input type="file" id="verify-upload" style="display:none">
+        <div id="verify-result" style="margin-top:14px"></div>
+      </div>
+
+      <div id="description-block" style="display:none" class="card mb-3">
+        <div style="font-size:14px;font-weight:500;margin-bottom:10px">Mô tả</div>
+        <div id="proof-desc" class="text-sm" style="line-height:1.7"></div>
+      </div>
+
+      <div class="card mb-3" id="report-block">
+        <button class="btn btn-secondary btn-sm" onclick="openReport()"><i class="ti ti-flag"></i> Báo cáo vi phạm</button>
+      </div>
+    </div>
+
+    <div class="layout-side">
+      <div style="font-size:13px;font-weight:500;margin-bottom:14px;color:var(--muted)">Chi tiết proof</div>
+      <div class="card card-sm mb-2">
+        <table style="width:100%;font-size:12px;border-collapse:collapse">
+          <tr><td class="text-muted" style="padding:5px 0;width:90px">File gốc</td><td id="d-filename" style="padding:5px 0;word-break:break-all"></td></tr>
+          <tr><td class="text-muted" style="padding:5px 0">Loại file</td><td id="d-filetype" style="padding:5px 0"></td></tr>
+          <tr><td class="text-muted" style="padding:5px 0">Kích thước</td><td id="d-filesize" style="padding:5px 0"></td></tr>
+          <tr><td class="text-muted" style="padding:5px 0">Ngày lưu</td><td id="d-date" style="padding:5px 0"></td></tr>
+          <tr><td class="text-muted" style="padding:5px 0">Đăng bởi</td><td id="d-submitter" style="padding:5px 0"></td></tr>
+          <tr><td class="text-muted" style="padding:5px 0">Visibility</td><td id="d-visibility" style="padding:5px 0"></td></tr>
+          <tr><td class="text-muted" style="padding:5px 0">Lượt xem</td><td id="d-views" style="padding:5px 0"></td></tr>
+        </table>
+      </div>
+      <div class="hash-box mb-2">
+        <div class="hash-label">SHA-256 fingerprint</div>
+        <div class="hash-value" id="d-hash"></div>
+      </div>
+      <div id="tags-block" style="display:none;margin-bottom:12px">
+        <div class="text-xs text-muted mb-1">Tags</div>
+        <div id="tags-list" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+      </div>
+      <div id="location-block" style="display:none" class="card card-sm mb-2">
+        <div class="text-xs text-muted mb-1"><i class="ti ti-map-pin"></i> Địa điểm</div>
+        <div id="d-location" class="text-sm"></div>
+      </div>
+      <div id="collections-block" style="display:none">
+        <div class="text-xs text-muted mb-1">Trong collection</div>
+        <div id="collections-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="report-modal">
+  <div class="modal">
+    <div class="modal-title">Báo cáo proof này</div>
+    <div class="form-group">
+      <label>Lý do</label>
+      <select id="report-reason">
+        <option value="illegal">Nội dung vi phạm pháp luật</option>
+        <option value="privacy">Thông tin cá nhân</option>
+        <option value="harassment">Quấy rối / bôi nhọ</option>
+        <option value="spam">Spam</option>
+        <option value="copyright">Vi phạm bản quyền</option>
+        <option value="other">Khác</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Chi tiết (tùy chọn)</label>
+      <textarea id="report-details" placeholder="Mô tả thêm..."></textarea>
+    </div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-secondary" onclick="closeReport()">Hủy</button>
+      <button class="btn btn-danger" onclick="submitReport()">Gửi báo cáo</button>
+    </div>
+  </div>
+</div>
+
+<script src="/js/app.js"></script>
+<script src="/js/proof.js"></script>
+</body>
+</html>

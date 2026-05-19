@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard — FileProof</title>
+<link rel="stylesheet" href="/css/style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="nav-logo" href="/"><div class="nav-pip"></div>FileProof</a>
+  <div class="nav-links">
+    <a href="/create.html" class="btn btn-primary btn-sm"><i class="ti ti-plus"></i> Tạo Proof</a>
+    <div id="nav-user" style="display:flex;gap:10px;align-items:center"></div>
+  </div>
+</nav>
+
+<div class="dash-layout" style="display:flex;min-height:calc(100vh - 57px)">
+  <div class="dash-sidebar" style="width:200px;border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;background:var(--surface)">
+    <div style="padding:0 16px;margin-bottom:8px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px" class="dash-sidebar-label">Menu</div>
+    <a class="side-nav-link active" id="snl-proofs" onclick="showTab('proofs')" href="javascript:void(0)"
+       style="display:flex;align-items:center;gap:9px;padding:9px 16px;font-size:14px;color:var(--ink);border-right:2px solid var(--accent)">
+      <i class="ti ti-shield"></i> My Proofs
+    </a>
+    <a class="side-nav-link" id="snl-collections" onclick="showTab('collections')" href="javascript:void(0)"
+       style="display:flex;align-items:center;gap:9px;padding:9px 16px;font-size:14px;color:var(--muted)">
+      <i class="ti ti-folder"></i> Collections
+    </a>
+    <a class="side-nav-link" id="snl-settings" onclick="showTab('settings')" href="javascript:void(0)"
+       style="display:flex;align-items:center;gap:9px;padding:9px 16px;font-size:14px;color:var(--muted)">
+      <i class="ti ti-settings"></i> Settings
+    </a>
+  </div>
+
+  <div class="dash-content" style="flex:1;padding:28px;min-width:0">
+    <div id="tab-proofs">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:10px">
+        <h2 style="font-size:18px;font-weight:500">My Proofs</h2>
+        <a href="/create.html" class="btn btn-primary btn-sm"><i class="ti ti-plus"></i> Tạo mới</a>
+      </div>
+      <div id="proofs-list"><div class="text-muted text-sm">Đang tải...</div></div>
+    </div>
+
+    <div id="tab-collections" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:10px">
+        <h2 style="font-size:18px;font-weight:500">My Collections</h2>
+        <button class="btn btn-primary btn-sm" onclick="openNewCollection()"><i class="ti ti-plus"></i> Tạo collection</button>
+      </div>
+      <div id="collections-list"><div class="text-muted text-sm">Đang tải...</div></div>
+    </div>
+
+    <div id="tab-settings" style="display:none">
+      <h2 style="font-size:18px;font-weight:500;margin-bottom:20px">Settings</h2>
+      <div style="max-width:440px">
+        <div class="form-group"><label>Tên hiển thị</label><input type="text" id="s-name"></div>
+        <div class="form-group"><label>Email</label><input type="text" id="s-email" disabled style="background:var(--surface)"></div>
+        <div id="settings-alert"></div>
+        <button class="btn btn-primary" onclick="saveSettings()">Lưu thay đổi</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="new-collection-modal">
+  <div class="modal">
+    <div class="modal-title">Tạo Collection mới</div>
+    <div class="form-group"><label>Tên collection *</label><input type="text" id="nc-name" placeholder="Vd: HCMC Flood Reports 2026"></div>
+    <div class="form-group"><label>Mô tả</label><textarea id="nc-desc" placeholder="Mô tả collection..."></textarea></div>
+    <div class="form-group">
+      <label>Visibility</label>
+      <select id="nc-visibility"><option value="public">Public</option><option value="unlisted">Unlisted</option><option value="private">Private</option></select>
+    </div>
+    <div id="nc-alert"></div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-secondary" onclick="closeNewCollection()">Hủy</button>
+      <button class="btn btn-accent" onclick="createCollection()">Tạo</button>
+    </div>
+  </div>
+</div>
+
+<script src="/js/app.js"></script>
+<script src="/js/dashboard.js"></script>
+</body>
+</html>

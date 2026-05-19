@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Explore — FileProof</title>
+<link rel="stylesheet" href="/css/style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="nav-logo" href="/"><div class="nav-pip"></div>FileProof</a>
+  <div class="nav-links">
+    <a href="/verify.html" class="nav-hide-mobile">Verify</a>
+    <a href="/create.html" class="btn btn-primary btn-sm">Tạo Proof</a>
+    <div id="nav-user" style="display:flex;gap:10px;align-items:center"></div>
+  </div>
+</nav>
+
+<div style="border-bottom:1px solid var(--border);background:var(--surface);padding:16px 24px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <h1 style="font-size:18px;font-weight:500">Explore Proofs</h1>
+  </div>
+  <div class="explore-bar" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <input type="text" id="search-input" placeholder="Tìm kiếm..." style="flex:1;min-width:160px" onkeydown="if(event.key==='Enter')search()">
+    <select id="cat-filter" style="width:180px;flex-shrink:0" onchange="search()">
+      <option value="">Tất cả danh mục</option>
+      <option>Disaster report</option>
+      <option>Legal document</option>
+      <option>Research</option>
+      <option>Journalism</option>
+      <option>Community report</option>
+      <option>Personal record</option>
+    </select>
+    <button class="btn btn-primary btn-sm" onclick="search()" style="flex-shrink:0"><i class="ti ti-search"></i> Tìm</button>
+  </div>
+</div>
+
+<div id="proof-grid" class="proof-grid" style="min-height:300px"></div>
+<div style="padding:20px 24px;border-top:1px solid var(--border);display:flex;justify-content:center;gap:8px;flex-wrap:wrap" id="pagination"></div>
+
+<script src="/js/app.js"></script>
+<script>
+let currentPage = 1;
+async function search(page = 1) {
+  currentPage = page;
+  const q = el('search-input').value.trim();
+  const cat = el('cat-filter').value;
+  let url = `/proofs?page=${page}&limit=18`;
+  if (q) url += `&search=${encodeURIComponent(q)}`;
+  if (cat) url += `&category=${encodeURIComponent(cat)}`;
+  el('proof-grid').innerHTML = `<div style="padding:60px;text-align:center;grid-column:1/-1"><div class="spinner" style="width:24px;height:24px;margin:0 auto"></div></div>`;
+  try {
+    const data = await api(url);
+    if (!data.proofs.length) {
+      el('proof-grid').innerHTML = `<div style="padding:60px;text-align:center;color:var(--muted);grid-column:1/-1">Không tìm thấy proof nào.</div>`;
+      el('pagination').innerHTML = ''; return;
+    }
+    el('proof-grid').innerHTML = data.proofs.map(p => `
+      <div class="proof-grid-item" onclick="location.href='/proof.html?id=${p.id}'">
+        <div class="proof-thumb">${fileIcon(p.file_type)}</div>
+        <div class="proof-thumb-title">${p.title}</div>
+        <div class="proof-thumb-meta">${p.file_type?.split('/')[1]||'file'} · ${formatBytes(p.file_size)}</div>
+        <div class="mt-1" style="display:flex;align-items:center;justify-content:space-between">
+          <span class="badge badge-green" style="font-size:10px"><span class="badge-pip"></span>Verified</span>
+          <span class="text-xs text-muted">${timeAgo(p.created_at)}</span>
+        </div>
+      </div>`).join('');
+    let pg = '';
+    for (let i = 1; i <= data.pages; i++)
+      pg += `<button class="btn btn-sm ${i===page?'btn-accent':'btn-secondary'}" onclick="search(${i})">${i}</button>`;
+    el('pagination').innerHTML = pg;
+  } catch(e) {
+    el('proof-grid').innerHTML = `<div style="padding:60px;text-align:center;color:var(--red);grid-column:1/-1">Lỗi: ${e.message}</div>`;
+  }
+}
+search();
+</script>
+</body>
+</html>
