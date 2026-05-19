@@ -1,161 +1,418 @@
+let proof = null;
 const proofId = new URLSearchParams(location.search).get('id');
-let proofData = null;
 
 async function loadProof() {
-  if (!proofId) { showError('Thiếu proof ID', ''); return; }
+  if (!proofId) { document.getElementById('proof-error').style.display = ''; return; }
   try {
-    proofData = await api(`/proofs/${proofId}`);
-    renderProof(proofData);
+    proof = await api(`/proofs/${proofId}`);
+    renderProof();
+    loadComments();
   } catch (e) {
-    showError('Không thể tải proof', e.message);
+    document.getElementById('proof-error').style.display = '';
+    document.getElementById('proof-error').textContent = e.message || 'Proof not found.';
+    document.getElementById('proof-loading').style.display = 'none';
   }
 }
 
-function showError(title, msg) {
-  el('proof-loading').style.display = 'none';
-  el('proof-error').style.display = 'block';
-  el('error-title').textContent = title;
-  el('error-msg').textContent = msg;
-}
+function renderProof() {
+  document.getElementById('proof-loading').style.display = 'none';
+  document.getElementById('proof-content').style.display = '';
 
-function renderProof(p) {
-  el('proof-loading').style.display = 'none';
-  el('proof-content').style.display = 'block';
+  // Title & header
+  document.getElementById('proof-title').textContent = proof.title;
+  document.title = `${proof.title} — FileProof`;
 
-  document.title = p.title + ' — FileProof';
-  el('proof-title').textContent = p.title;
-  el('proof-meta').textContent = `Preserved ${formatDate(p.created_at)} · ${p.view_count} lượt xem`;
-  el('btn-download').href = `/api/proofs/${p.id}/download`;
+  const tags = Array.isArray(proof.tags) ? proof.tags : JSON.parse(proof.tags || '[]');
 
-  if (p.category) {
-    el('proof-category-badge').style.display = 'inline-flex';
-    el('proof-category-badge').textContent = p.category;
-  }
+  // Community warning
+  const warningEl = document.getElementById('community-warning');
+  if (warningEl) warningEl.innerHTML = renderCommunityWarning(proof.community_status);
 
-  const media = el('media-container');
-  if (p.file_type?.startsWith('image/')) {
-    media.innerHTML = `<img src="/api/proofs/${p.id}/download" style="max-width:100%;border-radius:var(--radius-lg);max-height:500px;object-fit:contain">`;
-  } else if (p.file_type?.startsWith('video/')) {
-    media.innerHTML = `<video controls style="width:100%;border-radius:var(--radius-lg);max-height:460px;background:#000">
-      <source src="/api/proofs/${p.id}/download" type="${p.file_type}">
-    </video>`;
-  } else if (p.file_type?.startsWith('audio/')) {
-    media.innerHTML = `<audio controls style="width:100%;margin-bottom:12px"><source src="/api/proofs/${p.id}/download"></audio>`;
-  } else if (p.file_type === 'application/pdf') {
-    media.innerHTML = `<iframe src="/api/proofs/${p.id}/download" style="width:100%;height:500px;border:1px solid var(--border);border-radius:var(--radius-lg)"></iframe>`;
+  // Submitter
+  let submitterHtml = '';
+  if (proof.submitter_type === 'wallet' && proof.wallet_address) {
+    const addr = proof.wallet_address;
+    const short = addr.slice(0, 6) + '…' + addr.slice(-4);
+    const verified = proof.wallet_signature_verified ? '<span class="badge badge-green" style="margin-left:6px">Wallet Verified</span>' : '';
+    submitterHtml = `Submitted by <strong>${short}</strong>${verified}`;
+  } else if (proof.owner_name) {
+    submitterHtml = `Submitted by <strong>${escapeHtml(proof.owner_name)}</strong>`;
   } else {
-    media.innerHTML = `<div class="card" style="text-align:center;padding:40px">
-      <div style="font-size:48px;margin-bottom:12px">${fileIcon(p.file_type)}</div>
-      <div style="font-size:15px;font-weight:500;margin-bottom:6px">${p.file_name}</div>
-      <div class="text-muted text-sm">Preview không khả dụng cho định dạng này.</div>
-    </div>`;
+    submitterHtml = `Submitted anonymously`;
   }
 
-  el('d-filename').textContent = p.file_name;
-  el('d-filetype').textContent = p.file_type;
-  el('d-filesize').textContent = formatBytes(p.file_size);
-  el('d-date').textContent = formatDate(p.created_at);
-  el('d-submitter').textContent = p.submitter_type === 'anonymous' ? 'Anonymous' : (p.owner_name || 'Người dùng');
-  el('d-visibility').textContent = p.visibility;
-  el('d-views').textContent = p.view_count;
-  el('d-hash').textContent = p.sha256_hash;
+  document.getElementById('proof-submitter').innerHTML = submitterHtml;
+  document.getElementById('proof-date').textContent = `Preserved on ${formatDate(proof.created_at)}`;
 
-  if (p.description) {
-    el('description-block').style.display = 'block';
-    el('proof-desc').textContent = p.description;
-  }
-  if (p.location_text) {
-    el('location-block').style.display = 'block';
-    el('d-location').textContent = p.location_text;
-  }
-  if (p.tags?.length) {
-    el('tags-block').style.display = 'block';
-    el('tags-list').innerHTML = p.tags.map(t => `<span class="badge badge-gray">${t}</span>`).join('');
+  // File verification status badge
+  const statusBadge = document.getElementById('proof-status-badge');
+  if (statusBadge) {
+    statusBadge.className = 'badge badge-green';
+    statusBadge.innerHTML = '<span class="badge-pip"></span> File preserved';
   }
 
-  el('verify-upload').addEventListener('change', e => {
-    if (e.target.files[0]) verifyLocalFile(e.target.files[0]);
-  });
+  // Media viewer
+  renderMedia();
+
+  // Proof details
+  document.getElementById('detail-filename').textContent = proof.file_name;
+  document.getElementById('detail-filetype').textContent = proof.file_type;
+  document.getElementById('detail-filesize').textContent = formatBytes(proof.file_size);
+  document.getElementById('detail-created').textContent = formatDateTime(proof.created_at);
+  document.getElementById('detail-visibility').textContent = capitalize(proof.visibility);
+  document.getElementById('detail-storage').textContent = proof.storage_provider === 'shelby' ? 'Shelby' : 'Local storage';
+
+  if (proof.location_text) {
+    document.getElementById('detail-location-row').style.display = '';
+    document.getElementById('detail-location').textContent = proof.location_text;
+  }
+  if (proof.event_date) {
+    document.getElementById('detail-event-row').style.display = '';
+    document.getElementById('detail-event-date').textContent = formatDate(proof.event_date);
+  }
+  if (proof.category) {
+    document.getElementById('detail-category-row').style.display = '';
+    document.getElementById('detail-category').textContent = proof.category;
+  }
+
+  // Tags
+  if (tags.length) {
+    document.getElementById('proof-tags').innerHTML = tags.map(t =>
+      `<span class="tag">${escapeHtml(t)}</span>`).join('');
+  }
+
+  // Technical details
+  document.getElementById('tech-hash').textContent = proof.sha256_hash;
+  document.getElementById('tech-blob-id').textContent = proof.shelby_blob_id || 'N/A';
+  document.getElementById('tech-record-id').textContent = proof.id;
+
+  // Community counts
+  renderCounts();
+
+  // Own proof controls
+  const user = getUser();
+  if (user && proof.owner_id === user.id) {
+    document.getElementById('owner-controls').style.display = '';
+  }
 }
 
-async function verifyServer() {
-  const box = el('verify-result');
-  box.innerHTML = `<div class="text-muted text-sm"><span class="spinner"></span> Đang tải file từ server và tính hash...</div>`;
-  try {
-    const resp = await fetch(`/api/proofs/${proofId}/download`);
-    const blob = await resp.blob();
-    const file = new File([blob], proofData.file_name, { type: proofData.file_type });
-    const hash = await sha256File(file);
-    showVerifyResult(hash, proofData.sha256_hash, 'server');
-  } catch (e) {
-    box.innerHTML = `<div class="alert alert-error">Lỗi khi tải file: ${e.message}</div>`;
-  }
-}
+function renderMedia() {
+  const container = document.getElementById('media-viewer');
+  if (!container || !proof) return;
+  const mime = proof.file_type;
+  const src = proof.download_url || `/api/proofs/${proof.id}/download`;
 
-async function verifyLocalFile(file) {
-  const box = el('verify-result');
-  box.innerHTML = `<div class="text-muted text-sm"><span class="spinner"></span> Đang tính hash của "${file.name}"...</div>`;
-  try {
-    const hash = await sha256File(file);
-    showVerifyResult(hash, proofData.sha256_hash, 'local', file.name);
-  } catch (e) {
-    box.innerHTML = `<div class="alert alert-error">Lỗi: ${e.message}</div>`;
-  }
-}
-
-function showVerifyResult(hash, expected, source, filename) {
-  const match = hash === expected;
-  const box = el('verify-result');
-  if (match) {
-    box.innerHTML = `
-      <div class="verify-result match">
-        <div class="verify-result-icon">✓</div>
-        <div class="verify-result-title" style="color:var(--accent)">Khớp! File đúng bản gốc.</div>
-        <div class="verify-result-sub">${source === 'server' ? 'File trên server khớp với fingerprint đã lưu.' : `"${filename}" khớp với bản gốc đã preserved.`}</div>
-      </div>`;
+  if (mime.startsWith('image/')) {
+    container.innerHTML = `<img src="${src}" alt="${escapeHtml(proof.file_name)}" style="max-width:100%;max-height:480px;object-fit:contain;border-radius:8px;">`;
+  } else if (mime.startsWith('video/')) {
+    container.innerHTML = `<video src="${src}" controls style="width:100%;max-height:480px;border-radius:8px;background:#000;"></video>`;
+  } else if (mime.startsWith('audio/')) {
+    container.innerHTML = `<div style="padding:24px 0;"><audio src="${src}" controls style="width:100%;"></audio></div>`;
+  } else if (mime === 'application/pdf') {
+    container.innerHTML = `<iframe src="${src}" style="width:100%;height:480px;border:none;border-radius:8px;"></iframe>`;
   } else {
-    box.innerHTML = `
-      <div class="verify-result no-match">
-        <div class="verify-result-icon" style="color:var(--red)">✕</div>
-        <div class="verify-result-title" style="color:var(--red)">Không khớp.</div>
-        <div class="verify-result-sub">${source === 'server' ? 'Cảnh báo: File trên server có thể đã bị thay đổi.' : `"${filename}" khác với bản gốc đã preserved. File có thể đã bị nén, cắt, hoặc chỉnh sửa.`}</div>
-        <div class="hash-box mt-2" style="text-align:left">
-          <div class="hash-label">Hash của file bạn upload</div>
-          <div class="hash-value">${hash}</div>
-        </div>
+    container.innerHTML = `
+      <div style="padding:40px;text-align:center;color:var(--muted);">
+        <div style="font-size:48px;">${fileIcon(mime)}</div>
+        <p style="margin-top:12px;">No preview available for this file type.</p>
+        <a href="${src}" download class="btn btn-secondary btn-sm" style="margin-top:12px;">Download to view</a>
       </div>`;
   }
 }
 
-function copyLink() {
-  navigator.clipboard.writeText(window.location.href).then(() => {
-    const btn = el('btn-copy-link');
-    btn.innerHTML = `<i class="ti ti-check"></i> Đã copy`;
-    setTimeout(() => { btn.innerHTML = `<i class="ti ti-copy"></i> Copy link`; }, 2000);
-  });
+function renderCounts() {
+  if (!proof) return;
+  document.getElementById('count-useful').textContent = proof.useful_count || 0;
+  document.getElementById('count-question').textContent = proof.question_count || 0;
+  document.getElementById('count-comments').textContent = proof.comment_count || 0;
+  document.getElementById('count-flags').textContent = proof.flag_count || 0;
+
+  const user = getUser();
+  if (user) {
+    const usefulBtn = document.getElementById('btn-useful');
+    const questionBtn = document.getElementById('btn-question');
+    if (usefulBtn) usefulBtn.classList.toggle('active', proof.my_reaction === 'useful');
+    if (questionBtn) questionBtn.classList.toggle('active', proof.my_reaction === 'question');
+  }
 }
 
-function openReport() {
-  el('report-modal').classList.add('open');
-}
-
-function closeReport() {
-  el('report-modal').classList.remove('open');
-}
-
-async function submitReport() {
-  const reason = el('report-reason').value;
-  const details = el('report-details').value;
+// ─── Reactions ────────────────────────────────────────────────────────────────
+async function react(type) {
+  if (!getUser()) return (location.href = '/login.html');
   try {
-    await api(`/proofs/${proofId}/report`, {
+    const result = await api(`/proofs/${proofId}/reactions`, {
       method: 'POST',
-      body: JSON.stringify({ reason, details })
+      body: JSON.stringify({ type }),
     });
-    closeReport();
-    el('report-block').innerHTML = `<div class="text-muted text-sm">Cảm ơn. Báo cáo của bạn đã được ghi nhận.</div>`;
+
+    // Refresh counts
+    const summary = await api(`/proofs/${proofId}/reactions/summary`);
+    proof.useful_count = summary.useful_count;
+    proof.question_count = summary.question_count;
+    proof.my_reaction = summary.my_reaction;
+    renderCounts();
   } catch (e) {
-    alert('Lỗi: ' + e.message);
+    console.error(e);
   }
 }
 
-loadProof();
+// ─── Flag ─────────────────────────────────────────────────────────────────────
+function openFlagModal() {
+  if (!getUser()) return (location.href = '/login.html');
+  document.getElementById('flag-modal').style.display = 'flex';
+}
+
+function closeFlagModal() {
+  document.getElementById('flag-modal').style.display = 'none';
+}
+
+async function submitFlag() {
+  const reason = document.getElementById('flag-reason')?.value;
+  if (!reason) return;
+  try {
+    await api('/flags', {
+      method: 'POST',
+      body: JSON.stringify({ targetType: 'proof', targetId: proofId, reason }),
+    });
+    closeFlagModal();
+    document.getElementById('flag-thanks').style.display = '';
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+// ─── Verify ───────────────────────────────────────────────────────────────────
+async function verifyDisplayedFile() {
+  if (!proof) return;
+  const resultEl = document.getElementById('verify-result');
+  resultEl.innerHTML = '<span style="color:var(--muted)">Fetching file from storage and computing hash…</span>';
+
+  try {
+    const downloadUrl = proof.download_url || `/api/proofs/${proofId}/download`;
+    const response = await fetch(downloadUrl);
+    if (!response.ok) throw new Error('Could not fetch file from storage');
+
+    const blob = await response.blob();
+    const file = new File([blob], proof.file_name, { type: proof.file_type });
+    const hash = await sha256File(file);
+
+    if (hash === proof.sha256_hash) {
+      resultEl.innerHTML = `
+        <div class="verify-result verify-success">
+          <div class="verify-result-icon">✓</div>
+          <div>
+            <strong>Verified.</strong>
+            <p>The file served from storage matches the original proof record.</p>
+            <p class="mono" style="font-size:11px;margin-top:6px;word-break:break-all;">${hash}</p>
+          </div>
+        </div>`;
+    } else {
+      resultEl.innerHTML = `
+        <div class="verify-result verify-fail">
+          <div class="verify-result-icon">✕</div>
+          <div>
+            <strong>Warning.</strong>
+            <p>The file served from storage does not match the original proof record.</p>
+          </div>
+        </div>`;
+    }
+  } catch (e) {
+    resultEl.innerHTML = `<div class="verify-result verify-fail"><span>Error: ${escapeHtml(e.message)}</span></div>`;
+  }
+}
+
+document.getElementById('verify-file-input')?.addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if (!file || !proof) return;
+  const resultEl = document.getElementById('verify-result');
+  resultEl.innerHTML = '<span style="color:var(--muted)">Computing file fingerprint…</span>';
+  try {
+    const hash = await sha256File(file);
+    if (hash === proof.sha256_hash) {
+      resultEl.innerHTML = `
+        <div class="verify-result verify-success">
+          <div class="verify-result-icon">✓</div>
+          <div>
+            <strong>Match.</strong>
+            <p>Your file is identical to the preserved original.</p>
+            <p class="mono" style="font-size:11px;margin-top:6px;word-break:break-all;">${hash}</p>
+          </div>
+        </div>`;
+    } else {
+      resultEl.innerHTML = `
+        <div class="verify-result verify-fail">
+          <div class="verify-result-icon">✕</div>
+          <div>
+            <strong>Not a match.</strong>
+            <p>Your file may have been edited, compressed, cropped, or replaced.</p>
+          </div>
+        </div>`;
+    }
+  } catch (err) {
+    resultEl.innerHTML = `<div class="verify-result verify-fail"><span>Error computing hash: ${escapeHtml(err.message)}</span></div>`;
+  }
+});
+
+// ─── Comments ─────────────────────────────────────────────────────────────────
+let commentSort = 'newest';
+
+async function loadComments() {
+  try {
+    const comments = await api(`/proofs/${proofId}/comments?sort=${commentSort}`);
+    renderComments(comments);
+  } catch {}
+}
+
+function renderComments(comments) {
+  const container = document.getElementById('comments-list');
+  if (!container) return;
+  if (!comments.length) {
+    container.innerHTML = '<p style="color:var(--muted);font-size:14px;">No comments yet. Be the first to add context.</p>';
+    return;
+  }
+  container.innerHTML = comments.map(renderComment).join('');
+}
+
+function renderComment(c) {
+  const collapsed = c.collapsed;
+  const body = collapsed
+    ? `<div class="comment-collapsed">This comment is hidden by community filters. <button class="btn-link" onclick="showComment('${c.id}')">Show anyway</button></div>`
+    : `<div class="comment-body">${escapeHtml(c.body)}</div>`;
+
+  const user = getUser();
+  const isOwn = user && c.author_id === user.id;
+  const walletBadge = c.wallet_address ? `<span class="badge badge-gray" style="margin-left:6px">Wallet</span>` : '';
+
+  return `
+    <div class="comment" id="comment-${c.id}">
+      <div class="comment-header">
+        <strong>${escapeHtml(c.author_name || 'Anonymous')}</strong>${walletBadge}
+        <span class="comment-time" style="margin-left:8px;font-size:12px;color:var(--muted)">${timeAgo(c.created_at)}</span>
+        ${isOwn ? `<button class="btn-link danger" onclick="deleteComment('${c.id}')" style="margin-left:auto">Delete</button>` : `<button class="btn-link" onclick="flagComment('${c.id}')" style="margin-left:auto;font-size:12px;color:var(--muted)">Flag</button>`}
+      </div>
+      ${body}
+      <div class="comment-actions">
+        <button class="btn-link ${c.my_reaction === 'useful' ? 'active' : ''}" onclick="likeComment('${c.id}')">
+          ↑ Useful ${c.useful_count > 0 ? `(${c.useful_count})` : ''}
+        </button>
+        <button class="btn-link" onclick="toggleReply('${c.id}')">Reply</button>
+      </div>
+      <div id="reply-box-${c.id}" style="display:none;margin-top:8px;"></div>
+    </div>
+  `;
+}
+
+function showComment(commentId) {
+  const el = document.querySelector(`#comment-${commentId} .comment-collapsed`);
+  if (el) el.innerHTML = ''; // Let content show
+}
+
+async function submitComment() {
+  const user = getUser();
+  if (!user) return (location.href = '/login.html');
+  const textarea = document.getElementById('comment-input');
+  const body = textarea?.value?.trim();
+  if (!body) return;
+  try {
+    await api(`/proofs/${proofId}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ body }),
+    });
+    textarea.value = '';
+    proof.comment_count = (proof.comment_count || 0) + 1;
+    document.getElementById('count-comments').textContent = proof.comment_count;
+    loadComments();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+async function deleteComment(commentId) {
+  if (!confirm('Delete this comment?')) return;
+  try {
+    await api(`/proofs/comments/${commentId}`, { method: 'DELETE' });
+    loadComments();
+  } catch (e) { alert(e.message); }
+}
+
+async function likeComment(commentId) {
+  if (!getUser()) return (location.href = '/login.html');
+  try {
+    await api(`/proofs/comments/${commentId}/reactions`, { method: 'POST', body: JSON.stringify({ type: 'useful' }) });
+    loadComments();
+  } catch {}
+}
+
+async function flagComment(commentId) {
+  if (!getUser()) return (location.href = '/login.html');
+  const reason = prompt('Flag this comment as:\nspam / personal_info / harassment / other');
+  if (!reason) return;
+  try {
+    await api('/flags', { method: 'POST', body: JSON.stringify({ targetType: 'comment', targetId: commentId, reason }) });
+    loadComments();
+  } catch (e) { alert(e.message); }
+}
+
+function toggleReply(commentId) {
+  const box = document.getElementById(`reply-box-${commentId}`);
+  if (!box) return;
+  if (box.style.display === 'none') {
+    box.style.display = '';
+    box.innerHTML = `
+      <textarea placeholder="Write a reply…" id="reply-input-${commentId}" style="width:100%;min-height:60px;resize:vertical;font-size:13px;padding:8px;border:1px solid var(--border-md);border-radius:6px;font-family:inherit;"></textarea>
+      <div style="margin-top:6px;display:flex;gap:8px;">
+        <button class="btn btn-primary btn-sm" onclick="submitReply('${commentId}')">Reply</button>
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('reply-box-${commentId}').style.display='none'">Cancel</button>
+      </div>`;
+    document.getElementById(`reply-input-${commentId}`)?.focus();
+  } else {
+    box.style.display = 'none';
+  }
+}
+
+async function submitReply(parentId) {
+  if (!getUser()) return (location.href = '/login.html');
+  const input = document.getElementById(`reply-input-${parentId}`);
+  const body = input?.value?.trim();
+  if (!body) return;
+  try {
+    await api(`/proofs/${proofId}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ body, parent_id: parentId }),
+    });
+    loadComments();
+  } catch (e) { alert(e.message); }
+}
+
+function setSortComments(sort) {
+  commentSort = sort;
+  document.querySelectorAll('.sort-btn').forEach(b => b.classList.toggle('active', b.dataset.sort === sort));
+  loadComments();
+}
+
+// ─── Misc ─────────────────────────────────────────────────────────────────────
+function copyProofLink() {
+  navigator.clipboard.writeText(location.href).then(() => {
+    const btn = document.querySelector('[onclick="copyProofLink()"]');
+    if (btn) { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy link', 2000); }
+  });
+}
+
+function toggleTechDetails() {
+  const el = document.getElementById('tech-details');
+  const btn = document.getElementById('tech-toggle');
+  if (el.style.display === 'none') {
+    el.style.display = '';
+    if (btn) btn.textContent = 'Hide technical details';
+  } else {
+    el.style.display = 'none';
+    if (btn) btn.textContent = 'Show technical details';
+  }
+}
+
+function capitalize(str) {
+  if (!str) return '';
+  return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+document.addEventListener('DOMContentLoaded', loadProof);

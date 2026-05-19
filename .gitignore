@@ -1,4 +1,6 @@
 .env
 node_modules/
+database/*.db
+uploads/
 *.log
 .DS_Store

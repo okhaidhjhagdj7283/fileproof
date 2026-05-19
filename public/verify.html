@@ -1,74 +1,59 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Verify File — FileProof</title>
+<title>Verify a File — FileProof</title>
 <link rel="stylesheet" href="/css/style.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 </head>
 <body>
+
 <nav class="topnav">
   <a class="nav-logo" href="/"><div class="nav-pip"></div>FileProof</a>
   <div class="nav-links">
-    <a href="/" class="nav-hide-mobile">← Trang chủ</a>
+    <a href="/explore.html">Explore</a>
     <div id="nav-user" style="display:flex;gap:10px;align-items:center"></div>
   </div>
 </nav>
 
-<div style="max-width:700px;margin:0 auto;padding:40px 20px">
-  <h1 style="font-size:26px;font-weight:500;margin-bottom:8px">Verify a file</h1>
-  <p class="text-muted mb-3">Kiểm tra xem file bạn có có khớp với bản gốc đã preserved trên FileProof không.</p>
+<div style="max-width:600px;margin:60px auto;padding:0 20px;">
+  <h1 style="font-size:26px;font-weight:500;margin-bottom:8px;">Verify a file</h1>
+  <p style="color:var(--muted);font-size:14px;margin-bottom:32px;">
+    Paste a proof link or ID to look up a preserved file, then upload your copy to compare fingerprints.
+  </p>
 
-  <div class="card mb-3">
-    <div style="font-size:14px;font-weight:500;margin-bottom:12px">Bước 1 — Nhập proof link hoặc ID</div>
-    <div class="verify-search-row" style="display:flex;gap:10px">
-      <input type="text" id="proof-link" placeholder="fileproof.xyz/proof.html?id=abc123 hoặc proof ID" style="flex:1">
-      <button class="btn btn-primary" onclick="lookupProof()">Tìm</button>
+  <div class="card" style="margin-bottom:20px;">
+    <div style="font-weight:500;margin-bottom:12px;">Step 1 — Paste proof link or ID</div>
+    <div style="display:flex;gap:10px;">
+      <input type="text" id="proof-input" placeholder="https://fileproof.xyz/proof.html?id=… or proof ID" style="flex:1;">
+      <button class="btn btn-primary" onclick="resolveProof()">Look up</button>
     </div>
-    <div id="proof-found" style="display:none;margin-top:14px" class="card card-sm">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
-        <div style="min-width:0">
-          <div id="pf-title" style="font-size:14px;font-weight:500;word-break:break-all"></div>
-          <div id="pf-meta" class="text-muted text-xs mt-1"></div>
-        </div>
-        <span class="badge badge-green" style="flex-shrink:0"><span class="badge-pip"></span>Found</span>
-      </div>
-      <div class="hash-box mt-2">
-        <div class="hash-label">SHA-256 (expected)</div>
-        <div class="hash-value" id="pf-hash"></div>
-      </div>
-    </div>
-    <div id="proof-lookup-error" style="display:none" class="alert alert-error mt-2"></div>
+    <div id="resolve-result" style="margin-top:12px;"></div>
   </div>
 
-  <div class="card mb-3">
-    <div style="font-size:14px;font-weight:500;margin-bottom:12px">Bước 2 — Upload file cần kiểm tra</div>
-    <div class="drop-zone" id="verify-drop" onclick="el('verify-file').click()">
-      <div class="drop-zone-icon"><i class="ti ti-upload"></i></div>
-      <div class="drop-zone-title">Kéo thả file cần verify</div>
-      <div class="drop-zone-sub">hoặc click để chọn file</div>
-    </div>
-    <input type="file" id="verify-file" style="display:none">
-    <div id="verify-file-info" style="display:none;margin-top:12px">
-      <div style="display:flex;align-items:center;gap:10px">
-        <span id="vf-icon" style="font-size:24px;flex-shrink:0"></span>
-        <div style="min-width:0">
-          <div id="vf-name" style="font-size:14px;font-weight:500;word-break:break-all"></div>
-          <div id="vf-size" class="text-muted text-xs"></div>
-        </div>
-      </div>
-      <div class="hash-box mt-2" id="vf-hash-box" style="display:none">
-        <div class="hash-label">SHA-256 (file của bạn)</div>
-        <div class="hash-value" id="vf-hash"></div>
-      </div>
+  <div id="compare-section" style="display:none;">
+    <div class="card">
+      <div style="font-weight:500;margin-bottom:8px;">Step 2 — Upload your file to compare</div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">
+        Your file is hashed locally in your browser — it is not sent to any server.
+      </p>
+      <button class="btn btn-accent" onclick="document.getElementById('verify-upload').click()">
+        Choose file to compare
+      </button>
+      <input type="file" id="verify-upload" style="display:none">
+      <div id="compare-result" style="display:none;margin-top:14px;"></div>
     </div>
   </div>
 
-  <button class="btn btn-accent w-full" id="btn-verify" disabled onclick="doVerify()">
-    <i class="ti ti-fingerprint"></i> Verify ngay
-  </button>
-  <div id="verify-final" style="margin-top:20px"></div>
+  <div style="margin-top:40px;padding-top:24px;border-top:1px solid var(--border);">
+    <div style="font-size:13px;font-weight:500;color:var(--muted);margin-bottom:10px;">HOW IT WORKS</div>
+    <div style="font-size:13px;color:var(--muted);line-height:1.8;">
+      <div>1. FileProof stores a SHA-256 fingerprint of the original file when a proof is created.</div>
+      <div>2. You upload your copy — the fingerprint is computed locally in your browser.</div>
+      <div>3. The two fingerprints are compared. A match means the files are identical.</div>
+      <div style="margin-top:10px;font-style:italic;">FileProof does not prove that an event happened — only that a file matches the preserved original.</div>
+    </div>
+  </div>
 </div>
 
 <script src="/js/app.js"></script>
