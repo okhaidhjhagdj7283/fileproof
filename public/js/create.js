@@ -1,380 +1,297 @@
-// ─── FileProof Create Proof Flow ──────────────────────────────────────────────
-// Implements: hash → draft → upload-session → PUT to Shelby/local → complete
+// ─── FileProof Create Flow ─────────────────────────────────────────────────
 
-const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB, mirror server config
+const MAX_SIZE = 100 * 1024 * 1024;
+const ALLOWED = ['image/','video/','audio/','application/pdf','application/zip','application/x-zip','application/gzip','application/msword','application/vnd.openxmlformats','application/vnd.ms-','text/plain','text/csv'];
 
-const ALLOWED_TYPES = [
-  'image/', 'video/', 'audio/', 'application/pdf',
-  'application/zip', 'application/x-zip', 'application/gzip',
-  'application/msword', 'application/vnd.openxmlformats',
-  'application/vnd.ms-', 'text/plain', 'text/csv',
-];
+let selectedFile = null;
+let sha256Cache = null;
+let doneProofUrl = null;
 
-// ─── Utils ────────────────────────────────────────────────────────────────────
+// ── Utils ──────────────────────────────────────────────────────────────────
+function isAllowed(mime) { return ALLOWED.some(t => mime.startsWith(t)); }
 
-function formatBytes(bytes) {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+async function hashFile(file) {
+  const buf = await file.arrayBuffer();
+  const h = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2,'0')).join('');
 }
 
-function isAllowedType(mimeType) {
-  return ALLOWED_TYPES.some(t => mimeType.startsWith(t));
+// ── Steps navigation ───────────────────────────────────────────────────────
+function goToStep(n) {
+  [1,2,3].forEach(i => {
+    const panel = el('step-' + i);
+    if (panel) panel.style.display = i === n ? 'block' : 'none';
+    const tab = el('step-tab-' + i);
+    if (tab) {
+      tab.className = 'step-tab' + (i < n ? ' done' : i === n ? ' active' : '');
+      if (i < n) tab.querySelector('.step-num').textContent = '✓';
+      else tab.querySelector('.step-num').textContent = String(i);
+    }
+  });
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (n === 3) submitProof();
 }
 
-async function hashFileSHA256(file) {
-  const buffer = await file.arrayBuffer();
-  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-  return Array.from(new Uint8Array(hashBuffer))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
+// ── File handling ──────────────────────────────────────────────────────────
+function resetFile() {
+  selectedFile = null;
+  sha256Cache = null;
+  el('file-info').style.display = 'none';
+  el('drop-zone').style.display = '';
+  el('btn-to-step2').disabled = true;
+  const fi = el('file-input');
+  if (fi) fi.value = '';
 }
 
-function authHeaders() {
-  const token = localStorage.getItem('fp_token');
-  return token ? { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+function handleFile(file) {
+  if (!file) return;
+  if (!isAllowed(file.type || '')) {
+    toast('Định dạng file không được hỗ trợ: ' + (file.type || 'unknown'), 'error'); return;
+  }
+  if (file.size > MAX_SIZE) {
+    toast('File quá lớn: ' + formatBytes(file.size) + '. Tối đa 100 MB.', 'error'); return;
+  }
+
+  selectedFile = file;
+  sha256Cache = null;
+
+  el('drop-zone').style.display = 'none';
+  el('file-info').style.display = 'block';
+  el('file-icon-disp').textContent = fileIcon(file.type);
+  el('file-name-disp').textContent = file.name;
+  el('file-size-disp').textContent = formatBytes(file.size);
+  el('file-type-disp').textContent = file.type || 'unknown';
+
+  // Auto-fill title
+  const titleInp = el('inp-title');
+  if (titleInp && !titleInp.value) {
+    titleInp.value = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+  }
+
+  // Preview
+  renderPreview(file);
+
+  // Hash
+  el('hash-section').style.display = 'block';
+  el('hash-status').style.display = 'flex';
+  el('hash-value').style.display = 'none';
+
+  hashFile(file).then(h => {
+    sha256Cache = h;
+    el('hash-status').style.display = 'none';
+    el('hash-value').style.display = 'block';
+    el('hash-value').textContent = h;
+    el('btn-to-step2').disabled = false;
+  }).catch(() => {
+    el('hash-status').innerHTML = '<span class="text-red">Không thể tính fingerprint.</span>';
+  });
 }
-
-// ─── UI helpers ───────────────────────────────────────────────────────────────
-
-function setStep(msg, type = 'progress') {
-  const el = document.getElementById('fp-status');
-  if (!el) return;
-  el.textContent = msg;
-  el.className = `fp-status fp-status--${type}`;
-  el.style.display = 'block';
-}
-
-function setError(msg) {
-  setStep(msg, 'error');
-  setProgress(0);
-  document.getElementById('fp-submit-btn').disabled = false;
-  document.getElementById('fp-submit-btn').textContent = 'Create Proof';
-}
-
-function setProgress(pct) {
-  const bar = document.getElementById('fp-progress-bar');
-  if (!bar) return;
-  bar.style.width = pct + '%';
-  bar.parentElement.style.display = pct > 0 ? 'block' : 'none';
-}
-
-function showRecovery(draftId) {
-  const el = document.getElementById('fp-recovery');
-  if (!el) return;
-  el.innerHTML = `
-    <div class="fp-recovery-box">
-      <strong>Your file was uploaded, but the proof record could not be completed.</strong><br>
-      Please retry completing the proof.<br><br>
-      Recovery code: <code>${draftId}</code>
-    </div>
-  `;
-  el.style.display = 'block';
-}
-
-// ─── Preview ──────────────────────────────────────────────────────────────────
 
 function renderPreview(file) {
-  const container = document.getElementById('fp-preview');
+  const container = el('file-preview');
   if (!container) return;
   container.innerHTML = '';
-
   const url = URL.createObjectURL(file);
-  let el;
-
+  let el2;
   if (file.type.startsWith('image/')) {
-    el = document.createElement('img');
-    el.src = url;
-    el.style.cssText = 'max-width:100%;max-height:280px;border-radius:6px;display:block';
+    el2 = document.createElement('img');
+    el2.src = url;
+    el2.style.cssText = 'max-width:100%;max-height:240px;border-radius:6px;display:block';
   } else if (file.type.startsWith('video/')) {
-    el = document.createElement('video');
-    el.src = url;
-    el.controls = true;
-    el.style.cssText = 'max-width:100%;max-height:280px;border-radius:6px;display:block';
+    el2 = document.createElement('video');
+    el2.src = url; el2.controls = true;
+    el2.style.cssText = 'max-width:100%;max-height:240px;border-radius:6px;display:block';
   } else if (file.type.startsWith('audio/')) {
-    el = document.createElement('audio');
-    el.src = url;
-    el.controls = true;
-    el.style.cssText = 'width:100%';
+    el2 = document.createElement('audio');
+    el2.src = url; el2.controls = true; el2.style.width = '100%';
   } else if (file.type === 'application/pdf') {
-    el = document.createElement('iframe');
-    el.src = url;
-    el.style.cssText = 'width:100%;height:260px;border:none;border-radius:6px';
+    el2 = document.createElement('iframe');
+    el2.src = url;
+    el2.style.cssText = 'width:100%;height:220px;border:none;border-radius:6px';
   } else {
-    container.innerHTML = `<div class="fp-no-preview"><i class="ti ti-file"></i><p>No preview available</p><p class="text-muted text-sm">${file.type || 'Unknown type'}</p></div>`;
+    container.innerHTML = `<div style="padding:20px;text-align:center;color:var(--muted);background:var(--surface);border-radius:var(--radius);font-size:13px">${fileIcon(file.type)} No preview — ${file.type || 'unknown type'}</div>`;
     return;
   }
-  container.appendChild(el);
+  container.appendChild(el2);
 }
 
-// ─── Main flow ────────────────────────────────────────────────────────────────
-
-async function createProofFlow(file, form) {
-  let draftId = null;
-
+// ── Load user collections ──────────────────────────────────────────────────
+async function loadCollections() {
+  if (!isLoggedIn()) return;
   try {
-    // Step 1: Hash
-    setStep('Generating file fingerprint...', 'progress');
-    setProgress(10);
-    const sha256Hash = await hashFileSHA256(file);
+    const cols = await api('/collections/user/mine');
+    if (!cols.length) return;
+    const group = el('collection-group');
+    const sel = el('inp-collection');
+    if (!group || !sel) return;
+    cols.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.id; opt.textContent = c.name;
+      sel.appendChild(opt);
+    });
+    group.style.display = 'block';
+  } catch {}
+}
 
-    document.getElementById('fp-hash-display')
-      && (document.getElementById('fp-hash-display').textContent = sha256Hash);
+// ── Submit proof ───────────────────────────────────────────────────────────
+async function submitProof() {
+  if (!selectedFile || !sha256Cache) {
+    goToStep(1); return;
+  }
 
-    // Step 2: Create draft
-    setStep('Creating proof draft...', 'progress');
-    setProgress(20);
+  const title = el('inp-title')?.value?.trim() || selectedFile.name;
+  if (!title) { goToStep(2); toast('Vui lòng nhập tiêu đề.', 'error'); return; }
 
-    const draftRes = await fetch('/api/proofs/draft', {
+  const formData = {
+    title,
+    description: el('inp-description')?.value?.trim() || '',
+    category: el('inp-category')?.value || '',
+    tags: (el('inp-tags')?.value || '').split(',').map(t => t.trim()).filter(Boolean),
+    visibility: el('inp-visibility')?.value || 'public',
+    eventDate: el('inp-event-date')?.value || '',
+    locationText: el('inp-location')?.value?.trim() || '',
+    submitterType: isLoggedIn() ? 'account' : 'anonymous',
+    collectionId: el('inp-collection')?.value || '',
+  };
+
+  showState('submitting');
+  setStatus('Đang tạo proof draft…', 10);
+
+  let draftId = null;
+  try {
+    // Step 1: Draft
+    const draft = await api('/proofs/draft', {
       method: 'POST',
-      headers: authHeaders(),
       body: JSON.stringify({
-        fileName: file.name,
-        fileSize: file.size,
-        fileType: file.type || 'application/octet-stream',
-        sha256Hash,
+        fileName: selectedFile.name,
+        fileSize: selectedFile.size,
+        fileType: selectedFile.type || 'application/octet-stream',
+        sha256Hash: sha256Cache,
       }),
     });
-
-    if (!draftRes.ok) {
-      const e = await draftRes.json().catch(() => ({}));
-      throw new Error(e.error || 'Draft creation failed');
-    }
-
-    const draft = await draftRes.json();
     draftId = draft.draftId;
 
-    // Step 3: Get upload session
-    setStep('Preparing upload...', 'progress');
-    setProgress(30);
-
-    const sessionRes = await fetch('/api/storage/upload-session', {
+    // Step 2: Upload session
+    setStatus('Chuẩn bị upload…', 25);
+    const session = await api('/storage/upload-session', {
       method: 'POST',
-      headers: authHeaders(),
       body: JSON.stringify({
         draftId,
-        fileName: file.name,
-        fileSize: file.size,
-        fileType: file.type || 'application/octet-stream',
-        sha256Hash,
+        fileName: selectedFile.name,
+        fileSize: selectedFile.size,
+        fileType: selectedFile.type || 'application/octet-stream',
+        sha256Hash: sha256Cache,
       }),
     });
 
-    if (!sessionRes.ok) {
-      const e = await sessionRes.json().catch(() => ({}));
-      throw new Error(e.error || 'Could not prepare upload session');
-    }
-
-    const session = await sessionRes.json();
-
-    // Step 4: Upload file to Shelby or local endpoint
-    setStep('Uploading file to storage...', 'progress');
-    setProgress(40);
-
+    // Step 3: Upload file
+    setStatus('Đang upload file…', 40);
     const uploadUrl = session.uploadUrl.startsWith('http')
       ? session.uploadUrl
       : window.location.origin + session.uploadUrl;
 
     const uploadRes = await fetch(uploadUrl, {
       method: 'PUT',
-      headers: { 'Content-Type': file.type || 'application/octet-stream' },
-      body: file,
+      headers: { 'Content-Type': selectedFile.type || 'application/octet-stream' },
+      body: selectedFile,
     });
+    if (!uploadRes.ok) throw new Error('Upload file thất bại');
 
-    if (!uploadRes.ok) {
-      throw new Error('File upload to storage failed');
-    }
+    setStatus('Xác nhận upload…', 65);
 
-    setProgress(65);
-
-    // Step 5: Confirm upload, get blob ID
-    setStep('Confirming upload...', 'progress');
-
+    // Step 4: Confirm
     let shelbyBlobId, storageProvider, storageUri;
-
     if (session.storageProvider === 'local') {
-      // Local upload endpoint returns blob info directly
-      const uploadData = await uploadRes.json().catch(() => null);
-      if (uploadData && uploadData.shelbyBlobId) {
-        shelbyBlobId = uploadData.shelbyBlobId;
-        storageProvider = uploadData.storageProvider;
-        storageUri = uploadData.storageUri;
-      } else {
-        shelbyBlobId = `local://${session._localTempName}`;
-        storageProvider = 'local';
-        storageUri = shelbyBlobId;
-      }
+      const upData = await uploadRes.json().catch(() => null);
+      shelbyBlobId = upData?.shelbyBlobId || `local://${session._localTempName}`;
+      storageProvider = 'local';
+      storageUri = shelbyBlobId;
     } else {
-      // Shelby: confirm session
-      const confirmRes = await fetch('/api/storage/confirm-upload', {
+      const confirmed = await api('/storage/confirm-upload', {
         method: 'POST',
-        headers: authHeaders(),
         body: JSON.stringify({
           uploadSessionId: session.uploadSessionId,
           localTempName: session._localTempName,
         }),
       });
-
-      if (!confirmRes.ok) {
-        const e = await confirmRes.json().catch(() => ({}));
-        throw new Error(e.error || 'Upload confirmation failed');
-      }
-
-      const confirmed = await confirmRes.json();
       shelbyBlobId = confirmed.shelbyBlobId;
       storageProvider = confirmed.storageProvider;
       storageUri = confirmed.storageUri;
     }
 
-    setProgress(75);
-
-    // Step 6: Complete proof
-    setStep('Saving proof record...', 'progress');
-
-    const completeRes = await fetch(`/api/proofs/${draftId}/complete`, {
+    // Step 5: Complete
+    setStatus('Đang lưu thông tin proof…', 80);
+    const complete = await api(`/proofs/${draftId}/complete`, {
       method: 'POST',
-      headers: authHeaders(),
       body: JSON.stringify({
-        title: form.title,
-        description: form.description || null,
-        category: form.category || null,
-        tags: form.tags || [],
-        visibility: form.visibility || 'public',
-        eventDate: form.eventDate || null,
-        locationText: form.locationText || null,
-        submitterType: form.submitterType || 'anonymous',
-        sha256Hash,
+        title: formData.title,
+        description: formData.description || null,
+        category: formData.category || null,
+        tags: formData.tags,
+        visibility: formData.visibility,
+        eventDate: formData.eventDate || null,
+        locationText: formData.locationText || null,
+        submitterType: formData.submitterType,
+        sha256Hash: sha256Cache,
         shelbyBlobId,
         storageUri: storageUri || shelbyBlobId,
-        collection_id: form.collectionId || null,
+        collection_id: formData.collectionId || null,
       }),
     });
 
-    if (!completeRes.ok) {
-      const e = await completeRes.json().catch(() => ({}));
-      showRecovery(draftId);
-      throw new Error(e.error || 'Metadata save failed');
-    }
+    setStatus('Hoàn tất!', 100);
 
-    setProgress(100);
-    setStep('Proof created!', 'success');
+    doneProofUrl = complete.proofUrl || `/proof.html?id=${complete.proofId || draftId}`;
+    el('done-link').href = doneProofUrl;
+    el('done-link').textContent = window.location.origin + doneProofUrl;
+    el('done-view-btn').href = doneProofUrl;
+    if (el('done-proof-id')) el('done-proof-id').textContent = 'Proof ID: ' + (complete.proofId || draftId);
 
-    const complete = await completeRes.json();
-    setTimeout(() => {
-      window.location.href = complete.proofUrl;
-    }, 600);
+    setTimeout(() => showState('done'), 400);
 
   } catch (err) {
-    console.error('createProofFlow error:', err);
-    setError(err.message || 'Something went wrong');
-    if (draftId) showRecovery(draftId);
+    showState('error');
+    el('error-msg').innerHTML = `<span>${escapeHtml(err.message || 'Đã có lỗi xảy ra')}</span>`;
+    if (draftId) {
+      el('recovery-box').style.display = 'block';
+      el('recovery-box').innerHTML = `<div class="alert alert-warning"><span>Recovery code: <code class="mono">${draftId}</code></span></div>`;
+    }
   }
 }
 
-// ─── Init ─────────────────────────────────────────────────────────────────────
+function showState(s) {
+  ['submitting','error','done'].forEach(n => {
+    const d = el('state-' + n);
+    if (d) d.style.display = n === s ? 'block' : 'none';
+  });
+}
 
+function setStatus(msg, pct) {
+  const st = el('submit-status');
+  const pr = el('submit-progress');
+  if (st) st.textContent = msg;
+  if (pr) pr.style.width = pct + '%';
+}
+
+function copyDoneLink() {
+  if (!doneProofUrl) return;
+  navigator.clipboard.writeText(window.location.origin + doneProofUrl).then(() => toast('Đã sao chép link!'));
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  const fileInput = document.getElementById('fp-file-input');
-  const dropZone = document.getElementById('fp-dropzone');
-  const form = document.getElementById('fp-create-form');
+  const fileInput = el('file-input');
+  const dropZone = el('drop-zone');
 
-  let selectedFile = null;
-  let sha256Cache = null;
+  fileInput?.addEventListener('change', e => handleFile(e.target.files[0]));
 
-  function handleFile(file) {
-    if (!file) return;
-
-    if (!isAllowedType(file.type)) {
-      setError(`Unsupported file type: ${file.type}`);
-      return;
-    }
-
-    if (file.size > MAX_FILE_SIZE) {
-      setError(`File too large: ${formatBytes(file.size)}. Max is ${formatBytes(MAX_FILE_SIZE)}.`);
-      return;
-    }
-
-    selectedFile = file;
-    sha256Cache = null;
-
-    // Show file info
-    const info = document.getElementById('fp-file-info');
-    if (info) {
-      info.innerHTML = `
-        <div class="fp-file-meta">
-          <span class="fp-file-name">${file.name}</span>
-          <span class="fp-file-size text-muted">${formatBytes(file.size)}</span>
-          <span class="fp-file-type text-muted">${file.type || 'unknown'}</span>
-        </div>
-      `;
-      info.style.display = 'block';
-    }
-
-    renderPreview(file);
-
-    // Auto-fill title from filename
-    const titleInput = document.getElementById('fp-title');
-    if (titleInput && !titleInput.value) {
-      titleInput.value = file.name.replace(/\.[^/.]+$/, '');
-    }
-
-    // Start hashing in background
-    setStep('Generating file fingerprint...', 'progress');
-    hashFileSHA256(file).then(hash => {
-      sha256Cache = hash;
-      const el = document.getElementById('fp-hash-display');
-      if (el) {
-        el.textContent = hash;
-        el.parentElement.style.display = 'block';
-      }
-      setStep('File fingerprint generated. Fill in details and create proof.', 'success');
-    }).catch(() => {
-      setStep('Could not generate fingerprint. Please try again.', 'error');
-    });
-  }
-
-  // File input change
-  fileInput?.addEventListener('change', (e) => {
-    handleFile(e.target.files[0]);
-  });
-
-  // Drag & drop
-  dropZone?.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    dropZone.classList.add('dragging');
-  });
-  dropZone?.addEventListener('dragleave', () => dropZone.classList.remove('dragging'));
-  dropZone?.addEventListener('drop', (e) => {
-    e.preventDefault();
-    dropZone.classList.remove('dragging');
+  dropZone?.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone?.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone?.addEventListener('drop', e => {
+    e.preventDefault(); dropZone.classList.remove('drag-over');
     handleFile(e.dataTransfer.files[0]);
   });
   dropZone?.addEventListener('click', () => fileInput?.click());
 
-  // Form submit
-  form?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    if (!selectedFile) { setError('Please select a file first'); return; }
-
-    const btn = document.getElementById('fp-submit-btn');
-    btn.disabled = true;
-    btn.textContent = 'Creating...';
-
-    const tagsRaw = document.getElementById('fp-tags')?.value || '';
-    const tags = tagsRaw.split(',').map(t => t.trim()).filter(Boolean);
-
-    const formData = {
-      title: document.getElementById('fp-title')?.value?.trim() || selectedFile.name,
-      description: document.getElementById('fp-description')?.value?.trim() || '',
-      category: document.getElementById('fp-category')?.value || '',
-      tags,
-      visibility: document.getElementById('fp-visibility')?.value || 'public',
-      eventDate: document.getElementById('fp-event-date')?.value || '',
-      locationText: document.getElementById('fp-location')?.value?.trim() || '',
-      submitterType: localStorage.getItem('fp_token') ? 'account' : 'anonymous',
-      collectionId: document.getElementById('fp-collection')?.value || '',
-    };
-
-    await createProofFlow(selectedFile, formData);
-  });
+  loadCollections();
 });

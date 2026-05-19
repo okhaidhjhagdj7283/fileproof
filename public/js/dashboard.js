@@ -1,103 +1,123 @@
+// ─── FileProof Dashboard ───────────────────────────────────────────────────
+
 let activeTab = 'proofs';
 
 function setTab(tab) {
   activeTab = tab;
-  ['proofs', 'collections'].forEach(t => {
-    document.getElementById(`tab-${t}`)?.classList.toggle('active', t === tab);
-    document.getElementById(`panel-${t}`)?.style && (document.getElementById(`panel-${t}`).style.display = t === tab ? '' : 'none');
+  ['proofs','collections'].forEach(t => {
+    const btn = el('tab-' + t);
+    const panel = el('panel-' + t);
+    if (btn) {
+      btn.classList.toggle('active', t === tab);
+      btn.style.borderBottomColor = t === tab ? 'var(--accent)' : 'transparent';
+      btn.style.color = t === tab ? 'var(--ink)' : 'var(--muted)';
+    }
+    if (panel) panel.style.display = t === tab ? 'block' : 'none';
   });
   if (tab === 'proofs') loadMyProofs();
   if (tab === 'collections') loadMyCollections();
 }
 
 async function loadMyProofs() {
-  const container = document.getElementById('my-proofs-list');
-  if (!container) return;
-  container.innerHTML = '<div style="color:var(--muted)">Loading…</div>';
+  const c = el('my-proofs-list');
+  if (!c) return;
+  c.innerHTML = '<div class="text-muted text-sm">Đang tải…</div>';
   try {
     const proofs = await api('/proofs/user/mine');
+    // Update stats
+    const totalViews = proofs.reduce((s, p) => s + (p.view_count || 0), 0);
+    const totalUseful = proofs.reduce((s, p) => s + (p.useful_count || 0), 0);
+    if (el('stat-total')) el('stat-total').textContent = proofs.length;
+    if (el('stat-views')) el('stat-views').textContent = totalViews;
+    if (el('stat-useful')) el('stat-useful').textContent = totalUseful;
+
     if (!proofs.length) {
-      container.innerHTML = '<p style="color:var(--muted)">You haven\'t created any proofs yet. <a href="/create.html">Create your first proof →</a></p>';
+      c.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📭</div><p>Bạn chưa tạo proof nào.</p><a href="/create.html" class="btn btn-primary btn-sm">Tạo proof đầu tiên</a></div>`;
       return;
     }
-    container.innerHTML = proofs.map(p => {
+    c.innerHTML = proofs.map(p => {
       const tags = Array.isArray(p.tags) ? p.tags : JSON.parse(p.tags || '[]');
-      const statusCls = p.status === 'active' ? 'badge-green' : 'badge-gray';
-      const commCls = p.community_status !== 'normal' ? 'badge-amber' : '';
       return `
-        <div class="proof-row card card-sm" style="margin-bottom:10px;display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;">
-          <div style="font-size:22px;flex-shrink:0">${fileIcon(p.file_type)}</div>
-          <div style="flex:1;min-width:0;">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-              <a href="/proof.html?id=${p.id}" style="font-weight:500;color:var(--ink)">${escapeHtml(p.title)}</a>
-              <span class="badge ${statusCls}">${p.status}</span>
-              ${p.community_status !== 'normal' ? `<span class="badge badge-amber">${p.community_status.replace(/_/g,' ')}</span>` : ''}
+        <div class="proof-row" style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
+          <div class="file-icon-cell">${fileIcon(p.file_type)}</div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px">
+              <a href="/proof.html?id=${p.id}" style="font-weight:500;color:var(--ink);font-size:14px">${escapeHtml(p.title)}</a>
+              <span class="badge ${p.status === 'active' ? 'badge-green' : 'badge-gray'}" style="font-size:10px">${p.status}</span>
+              ${p.community_status && p.community_status !== 'normal' ? `<span class="badge badge-amber" style="font-size:10px">${p.community_status.replace(/_/g,' ')}</span>` : ''}
             </div>
-            <div style="font-size:13px;color:var(--muted);margin-top:3px;">
+            <div class="text-muted text-sm">
               ${formatBytes(p.file_size)} · ${capitalize(p.visibility)} · ${formatDate(p.created_at)}
             </div>
-            <div style="font-size:12px;color:var(--muted);margin-top:3px;">
-              ${p.view_count} views · ${p.useful_count || 0} useful · ${p.question_count || 0} questioned · ${p.comment_count || 0} comments
+            <div class="text-xs text-muted mt-1">
+              ${p.view_count || 0} lượt xem · ${p.useful_count || 0} hữu ích · ${p.comment_count || 0} bình luận
             </div>
+            ${tags.length ? `<div class="mt-1">${tags.map(t => `<span class="tag" style="font-size:10px">${escapeHtml(t)}</span>`).join(' ')}</div>` : ''}
           </div>
-          <div style="display:flex;gap:8px;flex-shrink:0;flex-wrap:wrap;">
-            <a href="/proof.html?id=${p.id}" class="btn btn-secondary btn-sm">View</a>
-            <button class="btn btn-secondary btn-sm" onclick="copyLink('${p.id}')">Copy link</button>
-            <button class="btn btn-danger btn-sm" onclick="removeProof('${p.id}')">Remove</button>
+          <div class="proof-row-actions" style="display:flex;gap:6px;flex-wrap:wrap;flex-shrink:0">
+            <a href="/proof.html?id=${p.id}" class="btn btn-secondary btn-xs">Xem</a>
+            <button class="btn btn-secondary btn-xs" onclick="copyLink('${p.id}')">Link</button>
+            <button class="btn btn-danger btn-xs" onclick="removeProof('${p.id}')">Xóa</button>
           </div>
-        </div>`;
+        </div>
+      `;
     }).join('');
   } catch (e) {
-    container.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${e.message}</span></div>`;
+    c.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${escapeHtml(e.message)}</span></div>`;
   }
 }
 
 async function loadMyCollections() {
-  const container = document.getElementById('my-collections-list');
-  if (!container) return;
-  container.innerHTML = '<div style="color:var(--muted)">Loading…</div>';
+  const c = el('my-collections-list');
+  if (!c) return;
+  c.innerHTML = '<div class="text-muted text-sm">Đang tải…</div>';
   try {
     const cols = await api('/collections/user/mine');
     if (!cols.length) {
-      container.innerHTML = '<p style="color:var(--muted)">No collections yet. <a href="/collection.html">Create a collection →</a></p>';
+      c.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📁</div><p>Chưa có collection nào.</p><a href="/collection.html" class="btn btn-secondary btn-sm">Tạo collection</a></div>`;
       return;
     }
-    container.innerHTML = cols.map(c => `
-      <div class="card card-sm" style="margin-bottom:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-        <div style="flex:1;min-width:0;">
-          <div style="font-weight:500;">${escapeHtml(c.name)}</div>
-          <div style="font-size:13px;color:var(--muted)">${c.proof_count} proofs · ${capitalize(c.visibility)} · Updated ${formatDate(c.updated_at)}</div>
+    c.innerHTML = cols.map(col => `
+      <div class="proof-row" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div class="file-icon-cell" style="font-size:22px">📁</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:500;font-size:14px">${escapeHtml(col.name)}</div>
+          <div class="text-muted text-sm">${col.proof_count || 0} proofs · ${capitalize(col.visibility)} · ${formatDate(col.updated_at)}</div>
+          ${col.description ? `<div class="text-xs text-muted mt-1">${escapeHtml(col.description.slice(0,80))}${col.description.length > 80 ? '…' : ''}</div>` : ''}
         </div>
-        <div style="display:flex;gap:8px;flex-shrink:0;">
-          <a href="/collection.html?id=${c.id}" class="btn btn-secondary btn-sm">View</a>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <a href="/collection.html?id=${col.id}" class="btn btn-secondary btn-xs">Xem</a>
+          <button class="btn btn-secondary btn-xs" onclick="copyCollectionLink('${col.id}')">Link</button>
         </div>
-      </div>`).join('');
+      </div>
+    `).join('');
   } catch (e) {
-    container.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${e.message}</span></div>`;
+    c.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${escapeHtml(e.message)}</span></div>`;
   }
 }
 
 async function removeProof(id) {
-  if (!confirm('Remove this proof from FileProof? The original file will remain in storage.')) return;
+  if (!confirm('Xóa proof này khỏi FileProof? File gốc vẫn được lưu trong storage.')) return;
   try {
     await api(`/proofs/${id}/remove-from-app`, { method: 'DELETE' });
+    toast('Đã xóa proof');
     loadMyProofs();
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function copyLink(id) {
   const url = `${location.origin}/proof.html?id=${id}`;
-  navigator.clipboard.writeText(url).then(() => alert('Link copied!'));
+  navigator.clipboard.writeText(url).then(() => toast('Đã sao chép link!'));
 }
 
-function capitalize(str) {
-  if (!str) return '';
-  return str.charAt(0).toUpperCase() + str.slice(1);
+function copyCollectionLink(id) {
+  const url = `${location.origin}/collection.html?id=${id}`;
+  navigator.clipboard.writeText(url).then(() => toast('Đã sao chép link!'));
 }
 
 document.addEventListener('DOMContentLoaded', () => {
   const user = getUser();
-  if (!user) return (location.href = '/login.html');
-  document.getElementById('user-name').textContent = user.display_name || user.email;
+  if (!user) { location.href = '/login.html?next=/dashboard.html'; return; }
+  if (el('user-name')) el('user-name').textContent = user.display_name || user.email;
   setTab('proofs');
 });

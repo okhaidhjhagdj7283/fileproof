@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -11,200 +11,206 @@
 <nav class="topnav">
   <a class="nav-logo" href="/"><div class="nav-pip"></div>FileProof</a>
   <div class="nav-links">
-    <a href="/explore.html">Explore</a>
-    <div id="nav-user" style="display:flex;gap:10px;align-items:center"></div>
+    <a href="/explore.html" class="nav-hide-mobile text-muted text-sm">Explore</a>
+    <a href="/create.html" class="btn btn-primary btn-sm nav-hide-mobile">Tạo Proof</a>
+    <div id="nav-user" style="display:flex;gap:8px;align-items:center"></div>
+    <button class="nav-mobile-menu" id="nav-menu-btn" aria-label="Menu">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </button>
   </div>
 </nav>
 
-<div id="proof-loading" style="padding:80px;text-align:center;color:var(--muted);">
-  <div style="font-size:32px;margin-bottom:12px;">⏳</div>
-  Loading proof…
+<!-- Loading -->
+<div id="proof-loading" style="padding:80px 20px;text-align:center;color:var(--muted)">
+  <div class="spinner" style="margin:0 auto 16px"></div>
+  Đang tải proof…
 </div>
 
-<div id="proof-error" style="display:none;padding:80px;text-align:center;">
-  <div style="font-size:36px;margin-bottom:12px;">🔒</div>
-  <div style="font-size:18px;font-weight:500;margin-bottom:8px;">Not found</div>
-  <div style="color:var(--muted);font-size:14px;"></div>
+<!-- Error -->
+<div id="proof-error" style="display:none;padding:80px 20px;text-align:center">
+  <div style="font-size:40px;margin-bottom:14px">🔒</div>
+  <div style="font-size:18px;font-weight:500;margin-bottom:8px" id="proof-error-title">Không tìm thấy</div>
+  <div class="text-muted text-sm" id="proof-error-msg"></div>
+  <a href="/explore.html" class="btn btn-secondary mt-3">← Explore</a>
 </div>
 
-<div id="proof-content" style="display:none;">
+<!-- Content -->
+<div id="proof-content" style="display:none">
 
   <!-- Header -->
-  <div style="border-bottom:1px solid var(--border);padding:20px 24px;">
-    <div style="max-width:900px;margin:0 auto;">
-      <div id="community-warning"></div>
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
-        <div style="min-width:0;flex:1;">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
-            <span class="badge badge-green" id="proof-status-badge"><span class="badge-pip"></span>File preserved</span>
+  <div style="border-bottom:1px solid var(--border);padding:18px 20px">
+    <div style="max-width:960px;margin:0 auto">
+      <div id="community-warning-bar"></div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
+        <div style="min-width:0;flex:1">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+            <span class="badge badge-green"><span class="badge-pip"></span>File preserved</span>
+            <span id="visibility-badge" class="badge badge-gray"></span>
           </div>
-          <h1 id="proof-title" style="font-size:22px;font-weight:500;margin-bottom:6px;word-break:break-word;"></h1>
-          <div style="font-size:13px;color:var(--muted);">
-            <span id="proof-date"></span> ·
-            <span id="proof-submitter"></span>
-          </div>
+          <h1 id="proof-title" style="font-size:20px;font-weight:500;margin-bottom:5px;word-break:break-word;line-height:1.3"></h1>
+          <div class="text-muted text-sm" id="proof-meta"></div>
         </div>
-        <div style="display:flex;gap:8px;flex-shrink:0;flex-wrap:wrap;">
-          <button class="btn btn-secondary btn-sm" onclick="copyProofLink()">Copy link</button>
-          <a class="btn btn-primary btn-sm" id="btn-download" href="#">Download original</a>
+        <div class="proof-page-header-actions" style="display:flex;gap:8px;flex-wrap:wrap;flex-shrink:0">
+          <button class="btn btn-secondary btn-sm" onclick="copyProofLink()">Sao chép link</button>
+          <a class="btn btn-primary btn-sm" id="btn-download" href="#" download>Tải về</a>
         </div>
       </div>
     </div>
   </div>
 
-  <div style="max-width:900px;margin:0 auto;padding:24px 20px;display:grid;grid-template-columns:1fr 300px;gap:24px;align-items:start;">
+  <!-- Body: 2-col -->
+  <div style="max-width:960px;margin:0 auto;padding:0 20px">
+    <div class="layout-split" style="border:none;min-height:unset">
 
-    <!-- Main column -->
-    <div style="min-width:0;">
+      <!-- Main -->
+      <div class="layout-main" style="padding:20px 24px 28px 0">
 
-      <!-- Media viewer -->
-      <div class="card" style="margin-bottom:20px;overflow:hidden;padding:0;" id="media-viewer-wrap">
-        <div id="media-viewer" style="min-height:120px;"></div>
-      </div>
-
-      <!-- Verify panel -->
-      <div class="card" style="margin-bottom:20px;">
-        <div style="font-weight:500;margin-bottom:8px;">Verify this file</div>
-        <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">Check whether a file matches the preserved original.</p>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <button class="btn btn-accent btn-sm" onclick="verifyDisplayedFile()">Verify displayed file</button>
-          <button class="btn btn-secondary btn-sm" onclick="document.getElementById('verify-file-input').click()">Upload file to compare</button>
-        </div>
-        <input type="file" id="verify-file-input" style="display:none">
-        <div id="verify-result" style="margin-top:12px;"></div>
-      </div>
-
-      <!-- Description -->
-      <div class="card" id="proof-description-card" style="margin-bottom:20px;display:none;">
-        <div style="font-weight:500;margin-bottom:8px;">Description</div>
-        <div id="proof-description" style="font-size:14px;line-height:1.7;white-space:pre-wrap;"></div>
-      </div>
-
-      <!-- Community signals -->
-      <div class="card" style="margin-bottom:20px;">
-        <div style="font-weight:500;margin-bottom:14px;">Community</div>
-        <div class="reaction-bar">
-          <button class="reaction-btn" id="btn-useful" onclick="react('useful')">
-            ↑ Useful <span id="count-useful">0</span>
-          </button>
-          <button class="reaction-btn question" id="btn-question" onclick="react('question')">
-            ? Question context <span id="count-question">0</span>
-          </button>
-          <span style="font-size:13px;color:var(--muted);margin-left:4px;">
-            <span id="count-comments">0</span> comments ·
-            <span id="count-flags">0</span> flags
-          </span>
-        </div>
-        <p style="font-size:12px;color:var(--muted);margin-top:10px;">
-          Useful = worth noting · Question = context may be missing or disputed.<br>
-          Community signals are separate from file verification.
-        </p>
-        <div id="flag-thanks" style="display:none;margin-top:10px;font-size:13px;color:var(--muted);">
-          Thanks. This proof has been flagged for community review.
-        </div>
-      </div>
-
-      <!-- Comments -->
-      <div class="card" style="margin-bottom:20px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
-          <div style="font-weight:500;">Comments</div>
-          <div style="display:flex;gap:6px;">
-            <button class="sort-btn active" data-sort="newest" onclick="setSortComments('newest')">Newest</button>
-            <button class="sort-btn" data-sort="useful" onclick="setSortComments('useful')">Most useful</button>
+        <!-- Media -->
+        <div class="card mb-2" style="padding:0;overflow:hidden" id="media-card">
+          <div id="media-viewer" style="min-height:120px;display:flex;align-items:center;justify-content:center;padding:20px;color:var(--muted)">
+            <div class="spinner"></div>
           </div>
         </div>
-        <div id="comments-list" style="margin-bottom:16px;"></div>
-        <div id="comment-form">
-          <textarea id="comment-input" placeholder="Add context, notes, or observations…" style="margin-bottom:8px;"></textarea>
-          <button class="btn btn-primary btn-sm" onclick="submitComment()">Post comment</button>
-          <span style="font-size:12px;color:var(--muted);margin-left:10px;">Login required</span>
-        </div>
-      </div>
 
-    </div>
-
-    <!-- Sidebar -->
-    <div style="min-width:0;">
-
-      <!-- Proof details -->
-      <div class="card" style="margin-bottom:16px;">
-        <div style="font-size:13px;font-weight:500;margin-bottom:12px;color:var(--muted);">PROOF DETAILS</div>
-        <table style="width:100%;font-size:13px;border-collapse:collapse;">
-          <tr><td style="color:var(--muted);padding:5px 0;width:90px;vertical-align:top;">File name</td><td id="detail-filename" style="padding:5px 0;word-break:break-all;"></td></tr>
-          <tr><td style="color:var(--muted);padding:5px 0;">File type</td><td id="detail-filetype" style="padding:5px 0;"></td></tr>
-          <tr><td style="color:var(--muted);padding:5px 0;">File size</td><td id="detail-filesize" style="padding:5px 0;"></td></tr>
-          <tr><td style="color:var(--muted);padding:5px 0;">Created</td><td id="detail-created" style="padding:5px 0;"></td></tr>
-          <tr><td style="color:var(--muted);padding:5px 0;">Visibility</td><td id="detail-visibility" style="padding:5px 0;"></td></tr>
-          <tr><td style="color:var(--muted);padding:5px 0;">Storage</td><td id="detail-storage" style="padding:5px 0;"></td></tr>
-          <tr id="detail-location-row" style="display:none;"><td style="color:var(--muted);padding:5px 0;">Location</td><td id="detail-location" style="padding:5px 0;"></td></tr>
-          <tr id="detail-event-row" style="display:none;"><td style="color:var(--muted);padding:5px 0;">Event date</td><td id="detail-event-date" style="padding:5px 0;"></td></tr>
-          <tr id="detail-category-row" style="display:none;"><td style="color:var(--muted);padding:5px 0;">Category</td><td id="detail-category" style="padding:5px 0;"></td></tr>
-        </table>
-        <div id="proof-tags" style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;"></div>
-      </div>
-
-      <!-- Technical details -->
-      <div class="card" style="margin-bottom:16px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-          <div style="font-size:13px;font-weight:500;color:var(--muted);">TECHNICAL DETAILS</div>
-          <button id="tech-toggle" class="btn-link" onclick="toggleTechDetails()" style="font-size:12px;">Show</button>
-        </div>
-        <div id="tech-details" style="display:none;">
-          <div class="hash-box" style="margin-bottom:10px;">
-            <div class="hash-label">SHA-256</div>
-            <div class="hash-value" id="tech-hash"></div>
+        <!-- Verify panel -->
+        <div class="card mb-2">
+          <div style="font-weight:500;margin-bottom:6px">Verify this file</div>
+          <p class="text-muted text-sm mb-2">Kiểm tra xem file của bạn có khớp với bản gốc không.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-accent btn-sm" onclick="verifyDisplayedFile()">Verify file đang xem</button>
+            <button class="btn btn-secondary btn-sm" onclick="el('verify-file-input').click()">Upload file để so sánh</button>
           </div>
-          <div class="hash-box" style="margin-bottom:10px;">
-            <div class="hash-label">Storage blob ID</div>
-            <div class="hash-value" id="tech-blob-id"></div>
+          <input type="file" id="verify-file-input" style="display:none">
+          <div id="verify-result" style="margin-top:10px"></div>
+        </div>
+
+        <!-- Description -->
+        <div class="card mb-2" id="proof-description-card" style="display:none">
+          <div style="font-weight:500;margin-bottom:8px">Mô tả</div>
+          <div id="proof-description" style="font-size:14px;line-height:1.7;white-space:pre-wrap;word-break:break-word"></div>
+        </div>
+
+        <!-- Community -->
+        <div class="card mb-2">
+          <div style="font-weight:500;margin-bottom:12px">Cộng đồng</div>
+          <div class="reaction-bar mb-2">
+            <button class="reaction-btn" id="btn-useful" onclick="react('useful')">↑ Hữu ích <span id="count-useful">0</span></button>
+            <button class="reaction-btn question" id="btn-question" onclick="react('question')">? Nghi vấn <span id="count-question">0</span></button>
+            <span class="text-sm text-muted" style="margin-left:4px">
+              <span id="count-comments">0</span> bình luận ·
+              <span id="count-flags">0</span> flags
+            </span>
           </div>
-          <div class="hash-box">
-            <div class="hash-label">Metadata record</div>
-            <div class="hash-value" id="tech-record-id"></div>
+          <p class="text-xs text-muted">Hữu ích = đáng lưu ý · Nghi vấn = ngữ cảnh có thể không đủ hoặc sai.<br>Tín hiệu cộng đồng độc lập với việc xác minh file.</p>
+          <div id="flag-thanks" style="display:none;margin-top:10px;font-size:13px;color:var(--muted)">Cảm ơn. Proof này đã được gắn cờ để xem xét.</div>
+        </div>
+
+        <!-- Comments -->
+        <div class="card mb-2">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+            <div style="font-weight:500">Bình luận</div>
+            <div style="display:flex;gap:6px">
+              <button class="sort-btn active" data-sort="newest" onclick="setSortComments('newest')">Mới nhất</button>
+              <button class="sort-btn" data-sort="useful" onclick="setSortComments('useful')">Hữu ích nhất</button>
+            </div>
+          </div>
+          <div id="comments-list" style="margin-bottom:14px"></div>
+          <div id="comment-form">
+            <textarea id="comment-input" placeholder="Thêm ngữ cảnh, ghi chú, hoặc nhận xét…" rows="3" style="margin-bottom:8px"></textarea>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <button class="btn btn-primary btn-sm" onclick="submitComment()">Đăng bình luận</button>
+              <span class="text-xs text-muted">Cần đăng nhập · Ctrl+Enter</span>
+            </div>
           </div>
         </div>
+
       </div>
 
-      <!-- Flag -->
-      <div style="margin-bottom:16px;">
-        <button class="btn btn-secondary btn-sm btn-full" onclick="openFlagModal()">Flag this proof</button>
-      </div>
+      <!-- Sidebar -->
+      <div class="layout-side" style="padding:20px 0 20px 20px">
 
-      <!-- Owner controls -->
-      <div id="owner-controls" class="card" style="margin-bottom:16px;">
-        <div style="font-size:13px;font-weight:500;margin-bottom:10px;color:var(--muted);">YOUR PROOF</div>
-        <div style="display:flex;flex-direction:column;gap:8px;">
-          <a href="#" class="btn btn-secondary btn-sm" id="edit-proof-btn">Edit metadata</a>
-          <button class="btn btn-danger btn-sm" onclick="removeProof()">Remove from FileProof</button>
+        <!-- Proof details -->
+        <div class="card mb-2">
+          <div class="text-xs text-muted font-medium mb-2" style="text-transform:uppercase;letter-spacing:.5px">Chi tiết proof</div>
+          <table style="width:100%;font-size:13px;border-collapse:collapse">
+            <tr><td class="text-muted" style="padding:5px 0;width:90px;vertical-align:top">File name</td><td id="d-filename" style="padding:5px 0;word-break:break-all;font-size:12px"></td></tr>
+            <tr><td class="text-muted" style="padding:5px 0">File type</td><td id="d-filetype" style="padding:5px 0"></td></tr>
+            <tr><td class="text-muted" style="padding:5px 0">File size</td><td id="d-filesize" style="padding:5px 0"></td></tr>
+            <tr><td class="text-muted" style="padding:5px 0">Ngày tạo</td><td id="d-created" style="padding:5px 0"></td></tr>
+            <tr><td class="text-muted" style="padding:5px 0">Truy cập</td><td id="d-visibility" style="padding:5px 0"></td></tr>
+            <tr><td class="text-muted" style="padding:5px 0">Storage</td><td id="d-storage" style="padding:5px 0"></td></tr>
+            <tr id="d-location-row" style="display:none"><td class="text-muted" style="padding:5px 0">Địa điểm</td><td id="d-location" style="padding:5px 0"></td></tr>
+            <tr id="d-event-row" style="display:none"><td class="text-muted" style="padding:5px 0">Sự kiện</td><td id="d-event-date" style="padding:5px 0"></td></tr>
+            <tr id="d-category-row" style="display:none"><td class="text-muted" style="padding:5px 0">Danh mục</td><td id="d-category" style="padding:5px 0"></td></tr>
+          </table>
+          <div id="proof-tags-row" style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px"></div>
         </div>
-      </div>
 
+        <!-- Technical -->
+        <div class="card mb-2">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div class="text-xs text-muted font-medium" style="text-transform:uppercase;letter-spacing:.5px">Kỹ thuật</div>
+            <button class="btn-link text-xs" id="tech-toggle" onclick="toggleTech()">Hiện</button>
+          </div>
+          <div id="tech-details" style="display:none">
+            <div class="hash-box mb-2">
+              <div class="hash-label">SHA-256</div>
+              <div class="hash-value" id="tech-hash" style="cursor:pointer" onclick="copyHash()" title="Click để sao chép"></div>
+            </div>
+            <div class="hash-box mb-2">
+              <div class="hash-label">Storage blob ID</div>
+              <div class="hash-value" id="tech-blob"></div>
+            </div>
+            <div class="hash-box">
+              <div class="hash-label">Proof ID</div>
+              <div class="hash-value" id="tech-id"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Flag -->
+        <div class="mb-2">
+          <button class="btn btn-secondary btn-sm w-full" onclick="openFlagModal()">Gắn cờ proof này</button>
+        </div>
+
+        <!-- Owner controls -->
+        <div id="owner-controls" class="card" style="display:none">
+          <div class="text-xs text-muted font-medium mb-2" style="text-transform:uppercase;letter-spacing:.5px">Proof của bạn</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <button class="btn btn-danger btn-sm w-full" onclick="removeProof()">Xóa khỏi FileProof</button>
+          </div>
+        </div>
+
+      </div>
     </div>
   </div>
 </div>
 
 <!-- Flag modal -->
-<div class="modal-overlay" id="flag-modal" onclick="if(event.target===this)closeFlagModal()">
+<div class="modal-overlay" id="flag-modal">
   <div class="modal-box">
-    <div class="modal-title">Flag this proof</div>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">This will add a community flag. The file fingerprint remains verifiable.</p>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div class="modal-title" style="margin-bottom:0">Gắn cờ proof</div>
+      <button class="modal-close" onclick="closeFlagModal()">×</button>
+    </div>
+    <p class="text-muted text-sm mb-2">Thêm flag cộng đồng. Fingerprint file vẫn có thể xác minh được.</p>
     <div class="form-group">
-      <label>Reason</label>
+      <label>Lý do</label>
       <select id="flag-reason">
-        <option value="">Select a reason</option>
+        <option value="">Chọn lý do</option>
         <option value="spam">Spam</option>
-        <option value="personal_info">Personal information</option>
-        <option value="illegal_content">Illegal content</option>
-        <option value="harassment">Harassment</option>
-        <option value="copyright">Copyright concern</option>
-        <option value="misleading_metadata">Misleading metadata</option>
-        <option value="sensitive_content">Sensitive content</option>
-        <option value="other">Other</option>
+        <option value="personal_info">Thông tin cá nhân</option>
+        <option value="illegal_content">Nội dung vi phạm pháp luật</option>
+        <option value="harassment">Quấy rối</option>
+        <option value="copyright">Vi phạm bản quyền</option>
+        <option value="misleading_metadata">Thông tin sai lệch</option>
+        <option value="sensitive_content">Nội dung nhạy cảm</option>
+        <option value="other">Khác</option>
       </select>
     </div>
-    <div style="display:flex;gap:10px;margin-top:4px;">
-      <button class="btn btn-secondary" onclick="closeFlagModal()">Cancel</button>
-      <button class="btn btn-danger" onclick="submitFlag()">Submit flag</button>
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button class="btn btn-secondary" onclick="closeFlagModal()">Hủy</button>
+      <button class="btn btn-danger" onclick="submitFlag()">Gắn cờ</button>
     </div>
   </div>
 </div>

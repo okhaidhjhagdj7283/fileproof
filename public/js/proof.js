@@ -1,357 +1,318 @@
-// ─── FileProof Proof Page ─────────────────────────────────────────────────────
+// ─── FileProof Proof Page ─────────────────────────────────────────────────
 
-const params = new URLSearchParams(window.location.search);
-const PROOF_ID = params.get('id');
+const PROOF_ID = new URLSearchParams(location.search).get('id');
+let proofData = null;
+let commentSort = 'newest';
 
-async function hashFileSHA256(file) {
-  const buffer = await file.arrayBuffer();
-  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-  return Array.from(new Uint8Array(hashBuffer))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
+async function hashFile(file) {
+  const buf = await file.arrayBuffer();
+  const h = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2,'0')).join('');
 }
 
-function formatBytes(bytes) {
-  if (!bytes) return '—';
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return (bytes / 1024 / 1024).toFixed(1) + ' MB';
-}
-
-function formatDate(iso) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-}
-
-function shortHash(h) {
-  return h ? h.slice(0, 16) + '...' + h.slice(-8) : '—';
-}
-
-function authHeaders() {
-  const token = localStorage.getItem('fp_token');
-  const h = { 'Content-Type': 'application/json' };
-  if (token) h['Authorization'] = `Bearer ${token}`;
-  return h;
-}
-
-// ─── Media viewer ─────────────────────────────────────────────────────────────
-
+// ── Media rendering ────────────────────────────────────────────────────────
 function renderMedia(proof) {
-  const container = document.getElementById('fp-media-viewer');
-  if (!container || !proof.download_url) return;
-
+  const v = el('media-viewer');
+  if (!v) return;
   const url = proof.download_url;
-  let html = '';
 
-  if (proof.file_type?.startsWith('image/')) {
-    html = `<img src="${url}" alt="${proof.file_name}" style="max-width:100%;max-height:480px;border-radius:8px;display:block;margin:0 auto">`;
-  } else if (proof.file_type?.startsWith('video/')) {
-    html = `<video controls style="max-width:100%;max-height:480px;border-radius:8px;display:block;margin:0 auto"><source src="${url}" type="${proof.file_type}">Your browser doesn't support video.</video>`;
-  } else if (proof.file_type?.startsWith('audio/')) {
-    html = `<audio controls style="width:100%"><source src="${url}" type="${proof.file_type}">Your browser doesn't support audio.</audio>`;
-  } else if (proof.file_type === 'application/pdf') {
-    html = `<iframe src="${url}" style="width:100%;height:480px;border:none;border-radius:8px"></iframe>`;
-  } else {
-    html = `<div class="fp-no-preview"><i class="ti ti-file" style="font-size:48px;color:var(--muted)"></i><p style="margin-top:12px;color:var(--muted)">No preview available for this file type</p><p class="text-muted text-sm">${proof.file_type || 'unknown type'}</p></div>`;
-  }
-
-  container.innerHTML = html;
-}
-
-// ─── Community warning ────────────────────────────────────────────────────────
-
-function renderCommunityWarning(proof) {
-  const el = document.getElementById('fp-community-warning');
-  if (!el) return;
-
-  if (proof.community_status === 'community_flagged' || proof.community_status === 'sensitive') {
-    el.innerHTML = `
-      <div class="community-warning">
-        <strong>Community warning</strong>
-        <p>This proof has been flagged by multiple users. The file fingerprint is still verifiable, but the metadata or context may be disputed.</p>
-        <div style="display:flex;gap:16px;margin-top:8px">
-          <span>File verification: <strong id="fp-verify-badge">Available</strong></span>
-          <span>Community status: <strong>${proof.community_status === 'sensitive' ? 'Questioned' : 'Flagged'}</strong></span>
-        </div>
-      </div>
-    `;
-    el.style.display = 'block';
-  }
-}
-
-// ─── Verify displayed file (backend hash) ─────────────────────────────────────
-
-async function verifyStorage() {
-  const btn = document.getElementById('fp-verify-storage-btn');
-  const result = document.getElementById('fp-verify-result');
-  if (btn) btn.disabled = true;
-  if (result) result.innerHTML = '<span class="text-muted">Verifying...</span>';
-
-  try {
-    const res = await fetch(`/api/proofs/${PROOF_ID}/verify-storage`, {
-      method: 'POST',
-      headers: authHeaders(),
-    });
-    const data = await res.json();
-
-    if (data.match) {
-      result.innerHTML = `
-        <div class="verify-result verify-result--success">
-          <i class="ti ti-circle-check"></i>
-          <strong>Verified.</strong>
-          <p>The file served from storage matches the original proof record.</p>
-          <div class="hash-compare">
-            <div><span class="text-muted">Stored hash:</span> <code>${data.storedHash}</code></div>
-            <div><span class="text-muted">Storage hash:</span> <code>${data.storageHash}</code></div>
-          </div>
-        </div>
-      `;
-    } else {
-      result.innerHTML = `
-        <div class="verify-result verify-result--fail">
-          <i class="ti ti-alert-triangle"></i>
-          <strong>Warning.</strong>
-          <p>The file served from storage does not match the original proof record.</p>
-        </div>
-      `;
-    }
-  } catch (e) {
-    result.innerHTML = `<div class="verify-result verify-result--fail"><strong>Error:</strong> ${e.message}</div>`;
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
-// ─── Upload file to compare (client-side hash) ────────────────────────────────
-
-async function compareFile(file, proofHash) {
-  const result = document.getElementById('fp-compare-result');
-  if (result) result.innerHTML = '<span class="text-muted">Hashing your file...</span>';
-
-  try {
-    const hash = await hashFileSHA256(file);
-    if (hash === proofHash) {
-      result.innerHTML = `
-        <div class="verify-result verify-result--success">
-          <i class="ti ti-circle-check"></i>
-          <strong>Match.</strong>
-          <p>Your file is identical to the preserved original.</p>
-          <code style="font-size:11px;word-break:break-all">${hash}</code>
-        </div>
-      `;
-    } else {
-      result.innerHTML = `
-        <div class="verify-result verify-result--fail">
-          <i class="ti ti-alert-triangle"></i>
-          <strong>Not a match.</strong>
-          <p>Your file may have been edited, compressed, cropped, or replaced.</p>
-          <div class="hash-compare">
-            <div><span class="text-muted">Original:</span> <code>${proofHash}</code></div>
-            <div><span class="text-muted">Your file:</span> <code>${hash}</code></div>
-          </div>
-        </div>
-      `;
-    }
-  } catch (e) {
-    result.innerHTML = `<div class="verify-result verify-result--fail"><strong>Error hashing file:</strong> ${e.message}</div>`;
-  }
-}
-
-// ─── Load proof ───────────────────────────────────────────────────────────────
-
-async function loadProof() {
-  if (!PROOF_ID) {
-    document.getElementById('fp-proof-container').innerHTML = '<p class="text-muted">No proof ID specified.</p>';
+  if (!url) {
+    v.innerHTML = `<div style="padding:40px;text-align:center;color:var(--muted);font-size:13px">${fileIcon(proof.file_type)} File không có sẵn để xem</div>`;
     return;
   }
 
+  const mt = proof.file_type || '';
+  let html = '';
+  if (mt.startsWith('image/')) {
+    html = `<img src="${url}" alt="${escapeHtml(proof.file_name)}" style="max-width:100%;max-height:520px;display:block;margin:0 auto;border-radius:4px">`;
+  } else if (mt.startsWith('video/')) {
+    html = `<video controls style="max-width:100%;max-height:460px;display:block;margin:0 auto;border-radius:4px"><source src="${url}" type="${mt}">Trình duyệt không hỗ trợ video.</video>`;
+  } else if (mt.startsWith('audio/')) {
+    html = `<div style="padding:24px"><audio controls style="width:100%"><source src="${url}" type="${mt}">Trình duyệt không hỗ trợ audio.</audio></div>`;
+  } else if (mt === 'application/pdf') {
+    html = `<iframe src="${url}" style="width:100%;height:500px;border:none;display:block"></iframe>`;
+  } else {
+    html = `<div style="padding:40px;text-align:center;color:var(--muted)">${fileIcon(mt)}<p style="margin-top:10px;font-size:13px">Không có preview — ${mt || 'unknown'}</p><a href="${url}" class="btn btn-secondary btn-sm mt-2" download>Tải file về</a></div>`;
+  }
+  v.innerHTML = html;
+}
+
+// ── Community warning ──────────────────────────────────────────────────────
+function renderWarning(proof) {
+  const bar = el('community-warning-bar');
+  if (!bar) return;
+  if (proof.community_status === 'community_flagged' || proof.community_status === 'sensitive') {
+    bar.innerHTML = `
+      <div class="community-warning mb-2">
+        <span style="font-size:18px;flex-shrink:0">⚠</span>
+        <div>
+          <strong style="display:block;margin-bottom:4px;color:var(--amber)">Cảnh báo cộng đồng</strong>
+          <p class="text-sm">Proof này đã bị gắn cờ bởi nhiều người dùng. Fingerprint SHA-256 vẫn có thể xác minh, nhưng ngữ cảnh có thể bị tranh cãi.</p>
+        </div>
+      </div>`;
+  }
+}
+
+// ── Verify ─────────────────────────────────────────────────────────────────
+async function verifyDisplayedFile() {
+  if (!proofData?.download_url) return;
+  const res = el('verify-result');
+  res.innerHTML = '<span class="text-muted text-sm">Đang xác minh…</span>';
   try {
-    const res = await fetch(`/api/proofs/${PROOF_ID}`, { headers: authHeaders() });
-    if (!res.ok) {
-      const e = await res.json().catch(() => ({}));
-      document.getElementById('fp-proof-container').innerHTML = `<p class="text-muted">${e.error || 'Proof not found'}</p>`;
+    const r = await api(`/proofs/${PROOF_ID}/verify-storage`, { method: 'POST' });
+    res.innerHTML = r.match
+      ? `<div class="verify-result verify-success"><span class="verify-result-icon">✓</span><div><strong>Đã xác minh.</strong><p>File đang xem khớp với bản gốc đã lưu.</p><code>${r.storedHash}</code></div></div>`
+      : `<div class="verify-result verify-fail"><span class="verify-result-icon">✗</span><div><strong>Không khớp.</strong><p>File được phục vụ không khớp với bản gốc.</p></div></div>`;
+  } catch (e) {
+    res.innerHTML = `<div class="verify-result verify-fail"><span class="verify-result-icon">✗</span><div><strong>Lỗi:</strong> ${escapeHtml(e.message)}</div></div>`;
+  }
+}
+
+async function compareFile(file) {
+  const res = el('verify-result');
+  res.innerHTML = '<span class="text-muted text-sm">Đang tính fingerprint…</span>';
+  try {
+    const h = await hashFile(file);
+    const match = h === proofData.sha256_hash;
+    res.innerHTML = match
+      ? `<div class="verify-result verify-success"><span class="verify-result-icon">✓</span><div><strong>Khớp chính xác.</strong><p>File của bạn giống hệt bản gốc đã lưu.</p><code>${h}</code></div></div>`
+      : `<div class="verify-result verify-fail"><span class="verify-result-icon">✗</span><div><strong>Không khớp.</strong><p>File có thể đã bị chỉnh sửa, nén, hoặc cắt xén.</p><code>Gốc: ${proofData.sha256_hash}</code><code>File bạn: ${h}</code></div></div>`;
+  } catch (e) {
+    res.innerHTML = `<div class="verify-result verify-fail"><strong>Lỗi:</strong> ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// ── Reactions ──────────────────────────────────────────────────────────────
+async function loadReactions() {
+  try {
+    const data = await api(`/proofs/${PROOF_ID}/reactions/summary`);
+    el('count-useful').textContent = data.useful_count || 0;
+    el('count-question').textContent = data.question_count || 0;
+    if (data.my_reaction === 'useful') el('btn-useful').classList.add('active');
+    else el('btn-useful').classList.remove('active');
+    if (data.my_reaction === 'question') el('btn-question').classList.add('active');
+    else el('btn-question').classList.remove('active');
+  } catch {}
+}
+
+async function react(type) {
+  if (!isLoggedIn()) { window.location.href = '/login.html?next=' + encodeURIComponent(location.href); return; }
+  await api(`/proofs/${PROOF_ID}/reactions`, {
+    method: 'POST',
+    body: JSON.stringify({ type, reason: type === 'question' ? 'context_missing' : undefined }),
+  }).catch(() => {});
+  loadReactions();
+}
+
+// ── Comments ───────────────────────────────────────────────────────────────
+async function loadComments() {
+  try {
+    const comments = await api(`/proofs/${PROOF_ID}/comments?sort=${commentSort}`);
+    const list = el('comments-list');
+    if (!list) return;
+    if (!comments.length) {
+      list.innerHTML = '<p class="text-muted text-sm">Chưa có bình luận nào. Hãy thêm ngữ cảnh đầu tiên.</p>';
+      el('count-comments').textContent = '0';
       return;
     }
-
-    const proof = await res.json();
-
-    document.title = `${proof.title} — FileProof`;
-
-    // Header
-    document.getElementById('fp-proof-title').textContent = proof.title;
-    document.getElementById('fp-proof-date').textContent = `Preserved on ${new Date(proof.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}`;
-    document.getElementById('fp-proof-submitter').textContent = `Submitted by ${proof.submitter_type === 'account' ? (proof.owner_name || 'Account user') : proof.submitter_type === 'wallet' ? (proof.wallet_address ? proof.wallet_address.slice(0,6)+'...'+proof.wallet_address.slice(-4) : 'Wallet user') : 'Anonymous'}`;
-
-    // Proof details
-    document.getElementById('fp-file-name').textContent = proof.file_name;
-    document.getElementById('fp-file-type').textContent = proof.file_type;
-    document.getElementById('fp-file-size').textContent = formatBytes(proof.file_size);
-    document.getElementById('fp-storage-provider').textContent = proof.storage_provider || 'shelby';
-    document.getElementById('fp-created-at').textContent = formatDate(proof.created_at);
-    document.getElementById('fp-visibility').textContent = proof.visibility;
-
-    // Technical details
-    document.getElementById('fp-sha256').textContent = proof.sha256_hash;
-    document.getElementById('fp-blob-id').textContent = proof.shelby_blob_id || '—';
-    document.getElementById('fp-proof-id').textContent = proof.id;
-
-    // Tags
-    if (proof.tags?.length) {
-      document.getElementById('fp-tags').innerHTML = proof.tags.map(t => `<span class="tag">${t}</span>`).join('');
-    }
-
-    // Community warning
-    renderCommunityWarning(proof);
-
-    // Media viewer
-    renderMedia(proof);
-
-    // Download button
-    const dlBtn = document.getElementById('fp-download-btn');
-    if (dlBtn) dlBtn.href = `/api/proofs/${PROOF_ID}/download`;
-
-    // Copy link
-    document.getElementById('fp-copy-link-btn')?.addEventListener('click', () => {
-      navigator.clipboard.writeText(window.location.href);
-      const btn = document.getElementById('fp-copy-link-btn');
-      btn.textContent = 'Copied!';
-      setTimeout(() => btn.textContent = 'Copy link', 1500);
-    });
-
-    // Verify storage button
-    document.getElementById('fp-verify-storage-btn')?.addEventListener('click', verifyStorage);
-
-    // Compare file input
-    const compareInput = document.getElementById('fp-compare-input');
-    compareInput?.addEventListener('change', (e) => {
-      const file = e.target.files[0];
-      if (file) compareFile(file, proof.sha256_hash);
-    });
-
-    // Reactions
-    loadReactions(proof);
-
-    // Flag button
-    document.getElementById('fp-flag-btn')?.addEventListener('click', () => {
-      const reason = prompt('Flag reason:\nspam | personal_info | illegal_content | harassment | copyright | misleading_metadata | sensitive_content | other');
-      if (!reason) return;
-      flagProof(PROOF_ID, reason);
-    });
-
-    // Comments
-    loadComments(proof.id);
-
-  } catch (e) {
-    document.getElementById('fp-proof-container').innerHTML = `<p class="text-muted">Error loading proof: ${e.message}</p>`;
-  }
+    el('count-comments').textContent = comments.length;
+    list.innerHTML = comments.map(c => `
+      <div class="comment">
+        <div class="comment-header">
+          <strong style="font-size:13px">${escapeHtml(c.author_name || 'Ẩn danh')}</strong>
+          <span class="text-muted text-xs">${timeAgo(c.created_at)}</span>
+          ${c.signature_verified ? '<span class="badge badge-green" style="font-size:10px">✓ Signed</span>' : ''}
+          ${c.collapsed ? '<span class="badge badge-amber">Flagged</span>' : ''}
+        </div>
+        <div class="comment-body">${c.collapsed ? '<em class="text-muted">[Đã ẩn — bị cộng đồng gắn cờ]</em>' : escapeHtml(c.body)}</div>
+        <div class="comment-actions">
+          <button class="btn-link" onclick="usefulComment('${c.id}')">↑ Hữu ích (${c.useful_count || 0})</button>
+          ${isLoggedIn() ? `<button class="btn-link danger" onclick="flagComment('${c.id}')">Gắn cờ</button>` : ''}
+        </div>
+      </div>
+    `).join('');
+  } catch {}
 }
 
-// ─── Reactions ────────────────────────────────────────────────────────────────
-
-async function loadReactions(proof) {
-  const res = await fetch(`/api/proofs/${PROOF_ID}/reactions/summary`, { headers: authHeaders() });
-  if (!res.ok) return;
-  const data = await res.json();
-
-  const usefulBtn = document.getElementById('fp-useful-btn');
-  const questionBtn = document.getElementById('fp-question-btn');
-
-  if (usefulBtn) {
-    usefulBtn.textContent = `Useful (${data.useful_count})`;
-    if (data.my_reaction === 'useful') usefulBtn.classList.add('active');
-    usefulBtn.addEventListener('click', async () => {
-      if (!FP.isLoggedIn()) { window.location.href = '/login.html'; return; }
-      await fetch(`/api/proofs/${PROOF_ID}/reactions`, {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ type: 'useful' }),
-      });
-      loadReactions(proof);
-    });
-  }
-
-  if (questionBtn) {
-    questionBtn.textContent = `Question (${data.question_count})`;
-    if (data.my_reaction === 'question') questionBtn.classList.add('active');
-    questionBtn.addEventListener('click', async () => {
-      if (!FP.isLoggedIn()) { window.location.href = '/login.html'; return; }
-      await fetch(`/api/proofs/${PROOF_ID}/reactions`, {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ type: 'question', reason: 'context_missing' }),
-      });
-      loadReactions(proof);
-    });
-  }
+async function submitComment() {
+  if (!isLoggedIn()) { window.location.href = '/login.html?next=' + encodeURIComponent(location.href); return; }
+  const inp = el('comment-input');
+  const body = inp?.value?.trim();
+  if (!body) return;
+  try {
+    await api(`/proofs/${PROOF_ID}/comments`, { method: 'POST', body: JSON.stringify({ body }) });
+    inp.value = '';
+    loadComments();
+    toast('Đã đăng bình luận');
+  } catch (e) { toast(e.message, 'error'); }
 }
 
-// ─── Comments ────────────────────────────────────────────────────────────────
+async function usefulComment(id) {
+  if (!isLoggedIn()) { window.location.href = '/login.html'; return; }
+  await api(`/proofs/${PROOF_ID}/comments/${id}/useful`, { method: 'POST' }).catch(() => {});
+  loadComments();
+}
 
-async function loadComments(proofId) {
-  const res = await fetch(`/api/proofs/${proofId}/comments`);
-  if (!res.ok) return;
-  const comments = await res.json();
+async function flagComment(id) {
+  if (!isLoggedIn()) return;
+  await api('/flags', { method: 'POST', body: JSON.stringify({ targetType: 'comment', targetId: id, reason: 'spam' }) }).catch(() => {});
+  toast('Đã gắn cờ bình luận');
+}
 
-  const list = document.getElementById('fp-comments-list');
-  if (!list) return;
+function setSortComments(sort) {
+  commentSort = sort;
+  qsa('[data-sort]').forEach(b => b.classList.toggle('active', b.dataset.sort === sort));
+  loadComments();
+}
 
-  if (!comments.length) {
-    list.innerHTML = '<p class="text-muted text-sm">No comments yet. Be the first to add context.</p>';
+// ── Flags ──────────────────────────────────────────────────────────────────
+function openFlagModal() {
+  if (!isLoggedIn()) { window.location.href = '/login.html?next=' + encodeURIComponent(location.href); return; }
+  el('flag-modal').classList.add('open');
+}
+function closeFlagModal() { el('flag-modal').classList.remove('open'); }
+
+async function submitFlag() {
+  const reason = el('flag-reason').value;
+  if (!reason) { toast('Vui lòng chọn lý do.', 'error'); return; }
+  try {
+    await api('/flags', { method: 'POST', body: JSON.stringify({ targetType: 'proof', targetId: PROOF_ID, reason }) });
+    closeFlagModal();
+    el('flag-thanks').style.display = 'block';
+    toast('Đã gắn cờ proof');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Tech panel ─────────────────────────────────────────────────────────────
+function toggleTech() {
+  const d = el('tech-details');
+  const btn = el('tech-toggle');
+  const open = d.style.display !== 'none';
+  d.style.display = open ? 'none' : 'block';
+  btn.textContent = open ? 'Hiện' : 'Ẩn';
+}
+
+function copyHash() {
+  const h = proofData?.sha256_hash;
+  if (h) navigator.clipboard.writeText(h).then(() => toast('Đã sao chép hash'));
+}
+
+// ── Owner actions ──────────────────────────────────────────────────────────
+async function removeProof() {
+  if (!confirm('Xóa proof này khỏi FileProof? File gốc vẫn được lưu trong storage.')) return;
+  try {
+    await api(`/proofs/${PROOF_ID}/remove-from-app`, { method: 'DELETE' });
+    toast('Đã xóa proof');
+    setTimeout(() => window.location.href = '/dashboard.html', 800);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function copyProofLink() {
+  navigator.clipboard.writeText(window.location.href).then(() => toast('Đã sao chép link'));
+}
+
+// ── Load proof ─────────────────────────────────────────────────────────────
+async function loadProof() {
+  if (!PROOF_ID) {
+    showError('Thiếu proof ID', '');
     return;
   }
+  try {
+    const proof = await api(`/proofs/${PROOF_ID}`);
+    proofData = proof;
 
-  list.innerHTML = comments.map(c => `
-    <div class="comment ${c.collapsed ? 'comment--collapsed' : ''}">
-      <div class="comment-header">
-        <strong>${c.author_name || 'Anonymous'}</strong>
-        <span class="text-muted text-sm">${new Date(c.created_at).toLocaleDateString()}</span>
-        ${c.collapsed ? '<span class="badge badge-warn">Community flagged</span>' : ''}
-      </div>
-      <div class="comment-body">${c.collapsed ? '[Collapsed — flagged by community]' : c.body}</div>
-    </div>
-  `).join('');
-}
+    document.title = proof.title + ' — FileProof';
 
-async function postComment() {
-  if (!FP.isLoggedIn()) { window.location.href = '/login.html'; return; }
-  const input = document.getElementById('fp-comment-input');
-  const body = input?.value?.trim();
-  if (!body) return;
+    el('proof-loading').style.display = 'none';
+    el('proof-content').style.display = 'block';
 
-  const res = await fetch(`/api/proofs/${PROOF_ID}/comments`, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ body }),
-  });
+    // Header
+    el('proof-title').textContent = proof.title;
+    el('proof-meta').textContent = `Lưu trữ ${formatDateLong(proof.created_at)} · ${proof.submitter_type === 'account' ? (proof.owner_name || 'User') : proof.submitter_type === 'wallet' ? 'Wallet user' : 'Ẩn danh'}`;
+    el('visibility-badge').textContent = capitalize(proof.visibility);
 
-  if (res.ok) {
-    input.value = '';
-    loadComments(PROOF_ID);
+    // Details
+    el('d-filename').textContent = proof.file_name;
+    el('d-filetype').textContent = proof.file_type;
+    el('d-filesize').textContent = formatBytes(proof.file_size);
+    el('d-created').textContent = formatDate(proof.created_at);
+    el('d-visibility').textContent = capitalize(proof.visibility);
+    el('d-storage').textContent = proof.storage_provider || 'shelby';
+
+    if (proof.location_text) {
+      el('d-location-row').style.display = '';
+      el('d-location').textContent = proof.location_text;
+    }
+    if (proof.event_date) {
+      el('d-event-row').style.display = '';
+      el('d-event-date').textContent = formatDate(proof.event_date);
+    }
+    if (proof.category) {
+      el('d-category-row').style.display = '';
+      el('d-category').textContent = proof.category;
+    }
+
+    // Tags
+    const tags = Array.isArray(proof.tags) ? proof.tags : JSON.parse(proof.tags || '[]');
+    if (tags.length) {
+      el('proof-tags-row').innerHTML = tags.map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('');
+    }
+
+    // Tech
+    el('tech-hash').textContent = proof.sha256_hash;
+    el('tech-blob').textContent = proof.shelby_blob_id || '—';
+    el('tech-id').textContent = proof.id;
+
+    // Description
+    if (proof.description) {
+      el('proof-description-card').style.display = 'block';
+      el('proof-description').textContent = proof.description;
+    }
+
+    // Download
+    el('btn-download').href = `/api/proofs/${PROOF_ID}/download`;
+
+    // Warning
+    renderWarning(proof);
+
+    // Media
+    renderMedia(proof);
+
+    // Reactions + comments
+    loadReactions();
+    loadComments();
+    el('count-flags').textContent = proof.flag_count || 0;
+
+    // File compare
+    el('verify-file-input')?.addEventListener('change', e => {
+      const f = e.target.files[0];
+      if (f) compareFile(f);
+    });
+
+    // Owner controls
+    const user = getUser();
+    if (user && proof.owner_id === user.id) {
+      el('owner-controls').style.display = 'block';
+    }
+
+  } catch (e) {
+    showError('Không tìm thấy proof', e.message);
   }
 }
 
-async function flagProof(proofId, reason) {
-  if (!FP.isLoggedIn()) { window.location.href = '/login.html'; return; }
-  const validReasons = ['spam','personal_info','illegal_content','harassment','copyright','misleading_metadata','sensitive_content','other'];
-  if (!validReasons.includes(reason)) { alert('Invalid reason'); return; }
-
-  const res = await fetch('/api/flags', {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ targetType: 'proof', targetId: proofId, reason }),
-  });
-  const data = await res.json();
-  alert(data.message || 'Flagged.');
+function showError(title, msg) {
+  el('proof-loading').style.display = 'none';
+  el('proof-error').style.display = 'block';
+  el('proof-error-title').textContent = title;
+  el('proof-error-msg').textContent = msg;
 }
 
-// ─── Init ─────────────────────────────────────────────────────────────────────
-
+// ── Init ───────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   loadProof();
-
-  document.getElementById('fp-post-comment-btn')?.addEventListener('click', postComment);
-
-  document.getElementById('fp-comment-input')?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) postComment();
+  el('comment-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submitComment();
   });
+  // Close modal on backdrop click
+  el('flag-modal')?.addEventListener('click', e => { if (e.target === el('flag-modal')) closeFlagModal(); });
 });

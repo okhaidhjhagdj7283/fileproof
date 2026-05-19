@@ -1,144 +1,136 @@
-// ─── FileProof Verify Page ────────────────────────────────────────────────────
-
-async function hashFileSHA256(file) {
-  const buffer = await file.arrayBuffer();
-  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-  return Array.from(new Uint8Array(hashBuffer))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-function formatBytes(bytes) {
-  if (!bytes) return '—';
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return (bytes / 1024 / 1024).toFixed(1) + ' MB';
-}
+// ─── FileProof Verify Page ─────────────────────────────────────────────────
 
 let resolvedProof = null;
+let selectedVerifyFile = null;
+
+async function hashFile(file) {
+  const buf = await file.arrayBuffer();
+  const h = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+function showResolveResult(type, html) {
+  const box = el('resolve-result');
+  if (!box) return;
+  box.className = type === 'error' ? 'alert alert-error mt-1' : type === 'info' ? 'alert alert-warning mt-1' : '';
+  box.innerHTML = html;
+  box.style.display = html ? 'block' : 'none';
+}
+
+function showCompareResult(type, html) {
+  const box = el('compare-result');
+  if (!box) return;
+  box.innerHTML = `<div class="verify-result ${type === 'success' ? 'verify-success' : type === 'fail' ? 'verify-fail' : ''}">
+    <span class="verify-result-icon">${type === 'success' ? '✓' : type === 'fail' ? '✗' : '⏳'}</span>
+    <div>${html}</div>
+  </div>`;
+  box.style.display = 'block';
+}
+
+async function resolveProof() {
+  const input = el('proof-input')?.value?.trim();
+  if (!input) { showResolveResult('error', 'Vui lòng nhập proof link hoặc ID.'); return; }
+
+  const btn = el('resolve-btn');
+  btn.disabled = true;
+  btn.textContent = 'Đang tìm…';
+  showResolveResult('', '');
+
+  try {
+    const data = await api('/verify/resolve-proof', {
+      method: 'POST',
+      body: JSON.stringify({ input }),
+    });
+    resolvedProof = data;
+
+    // Show proof card
+    const card = el('proof-card');
+    card.innerHTML = `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+          <div style="min-width:0">
+            <div style="font-weight:500;margin-bottom:3px;word-break:break-word">${escapeHtml(data.title)}</div>
+            <div class="text-muted text-sm">${escapeHtml(data.file_name)} · ${formatBytes(data.file_size)}</div>
+            ${data.category ? `<span class="badge badge-gray mt-1" style="font-size:10px">${escapeHtml(data.category)}</span>` : ''}
+          </div>
+          <a href="/proof.html?id=${data.id}" class="btn btn-secondary btn-sm" target="_blank" style="flex-shrink:0">Xem proof</a>
+        </div>
+        <div class="hash-box">
+          <div class="hash-label">SHA-256 fingerprint đã lưu</div>
+          <div class="hash-value">${data.sha256_hash}</div>
+        </div>
+      </div>
+    `;
+    card.style.display = 'block';
+
+    el('compare-section').style.display = 'block';
+    showResolveResult('', `<div class="alert alert-success"><span>✓</span><span>Tìm thấy proof. Upload file của bạn để so sánh.</span></div>`);
+
+  } catch (e) {
+    resolvedProof = null;
+    showResolveResult('error', `<span>✕</span><span>${escapeHtml(e.message || 'Không tìm thấy proof')}</span>`);
+    el('proof-card').style.display = 'none';
+    el('compare-section').style.display = 'none';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Tìm kiếm';
+  }
+}
+
+function handleVerifyFile(file) {
+  if (!file) return;
+  selectedVerifyFile = file;
+  const label = el('vfy-file-label');
+  if (label) label.textContent = file.name + ' · ' + formatBytes(file.size);
+  el('vfy-verify-btn').style.display = 'block';
+}
+
+async function doVerify() {
+  if (!resolvedProof) { toast('Tìm proof trước.', 'error'); return; }
+  if (!selectedVerifyFile) { toast('Chọn file để so sánh.', 'error'); return; }
+
+  const btn = el('vfy-verify-btn');
+  btn.disabled = true;
+  btn.textContent = 'Đang tính fingerprint…';
+  showCompareResult('progress', 'Đang tính SHA-256 fingerprint của file bạn…');
+
+  try {
+    const hash = await hashFile(selectedVerifyFile);
+    if (hash === resolvedProof.sha256_hash) {
+      showCompareResult('success', `
+        <strong>Khớp chính xác.</strong>
+        <p>File của bạn giống hệt bản gốc đã lưu.</p>
+        <code>${hash}</code>
+      `);
+    } else {
+      showCompareResult('fail', `
+        <strong>Không khớp.</strong>
+        <p>File có thể đã bị chỉnh sửa, nén, cắt xén, hoặc bị thay thế.</p>
+        <code>Gốc: ${resolvedProof.sha256_hash}</code>
+        <code>File bạn: ${hash}</code>
+      `);
+    }
+  } catch (e) {
+    showCompareResult('fail', `<strong>Lỗi:</strong> ${escapeHtml(e.message)}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'So sánh fingerprint';
+  }
+}
 
 document.addEventListener('DOMContentLoaded', () => {
-  const proofInput = document.getElementById('vfy-proof-input');
-  const resolveBtn = document.getElementById('vfy-resolve-btn');
-  const fileInput = document.getElementById('vfy-file-input');
-  const verifyBtn = document.getElementById('vfy-verify-btn');
-  const resultBox = document.getElementById('vfy-result');
-  const proofCard = document.getElementById('vfy-proof-card');
+  const fileInput = el('verify-upload');
+  const dropZone = el('vfy-dropzone');
 
-  // Step 1: Resolve proof
-  async function resolveProof() {
-    const input = proofInput?.value?.trim();
-    if (!input) { showResult('error', 'Please enter a proof link or ID.'); return; }
+  fileInput?.addEventListener('change', e => handleVerifyFile(e.target.files[0]));
 
-    resolveBtn.disabled = true;
-    resolveBtn.textContent = 'Looking up...';
-
-    try {
-      const res = await fetch('/api/verify/resolve-proof', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input }),
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        showResult('error', data.error || 'Could not find proof');
-        return;
-      }
-
-      resolvedProof = data;
-
-      // Show proof card
-      if (proofCard) {
-        proofCard.innerHTML = `
-          <div class="card" style="margin-top:16px">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
-              <div>
-                <div style="font-weight:600;margin-bottom:4px">${data.title}</div>
-                <div class="text-muted text-sm">${data.file_name} · ${formatBytes(data.file_size)}</div>
-              </div>
-              <a href="/proof.html?id=${data.id}" class="btn btn-secondary btn-sm" target="_blank">View proof</a>
-            </div>
-            <div class="hash-box">
-              <div class="hash-label">SHA-256 fingerprint</div>
-              <div class="hash-value mono">${data.sha256_hash}</div>
-            </div>
-          </div>
-        `;
-        proofCard.style.display = 'block';
-      }
-
-      // Enable file compare
-      if (fileInput) fileInput.parentElement.style.display = 'block';
-      if (verifyBtn) verifyBtn.style.display = 'block';
-
-      showResult('info', 'Proof found. Now upload your file to compare.');
-
-    } catch (e) {
-      showResult('error', e.message || 'Network error');
-    } finally {
-      resolveBtn.disabled = false;
-      resolveBtn.textContent = 'Find Proof';
-    }
-  }
-
-  // Step 2: Compare file
-  async function verifyFile() {
-    if (!resolvedProof) { showResult('error', 'Resolve a proof first.'); return; }
-    const file = fileInput?.files[0];
-    if (!file) { showResult('error', 'Please select a file to compare.'); return; }
-
-    verifyBtn.disabled = true;
-    verifyBtn.textContent = 'Hashing...';
-    showResult('progress', 'Generating fingerprint of your file...');
-
-    try {
-      const hash = await hashFileSHA256(file);
-
-      if (hash === resolvedProof.sha256_hash) {
-        showResult('success', `
-          <strong>Match.</strong>
-          Your file is identical to the preserved original.
-          <div class="hash-compare" style="margin-top:8px">
-            <code style="font-size:11px;word-break:break-all">${hash}</code>
-          </div>
-        `);
-      } else {
-        showResult('fail', `
-          <strong>Not a match.</strong>
-          Your file may have been edited, compressed, cropped, or replaced.
-          <div class="hash-compare" style="margin-top:8px">
-            <div class="text-muted text-sm">Original: <code>${resolvedProof.sha256_hash}</code></div>
-            <div class="text-muted text-sm">Your file: <code>${hash}</code></div>
-          </div>
-        `);
-      }
-    } catch (e) {
-      showResult('error', 'Could not hash file: ' + e.message);
-    } finally {
-      verifyBtn.disabled = false;
-      verifyBtn.textContent = 'Compare File';
-    }
-  }
-
-  function showResult(type, html) {
-    if (!resultBox) return;
-    resultBox.className = `vfy-result vfy-result--${type}`;
-    resultBox.innerHTML = html;
-    resultBox.style.display = 'block';
-  }
-
-  resolveBtn?.addEventListener('click', resolveProof);
-  verifyBtn?.addEventListener('click', verifyFile);
-
-  proofInput?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') resolveProof();
+  dropZone?.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone?.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone?.addEventListener('drop', e => {
+    e.preventDefault(); dropZone.classList.remove('drag-over');
+    handleVerifyFile(e.dataTransfer.files[0]);
   });
+  dropZone?.addEventListener('click', () => fileInput?.click());
 
-  // Show file name when selected
-  fileInput?.addEventListener('change', (e) => {
-    const f = e.target.files[0];
-    const label = document.getElementById('vfy-file-label');
-    if (label && f) label.textContent = `${f.name} (${formatBytes(f.size)})`;
-  });
+  el('proof-input')?.addEventListener('keydown', e => { if (e.key === 'Enter') resolveProof(); });
 });
