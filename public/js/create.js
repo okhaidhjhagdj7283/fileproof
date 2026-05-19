@@ -1,254 +1,380 @@
-let selectedFile = null;
-let fileHash = null;
-let draftId = null;
-let draftData = null;
+// ─── FileProof Create Proof Flow ──────────────────────────────────────────────
+// Implements: hash → draft → upload-session → PUT to Shelby/local → complete
 
-const STEPS = ['select', 'metadata', 'submitting', 'done'];
-let currentStep = 'select';
+const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB, mirror server config
 
-function setStep(step) {
-  currentStep = step;
-  STEPS.forEach(s => {
-    const el = document.getElementById(`step-${s}`);
-    if (el) el.style.display = s === step ? '' : 'none';
-  });
+const ALLOWED_TYPES = [
+  'image/', 'video/', 'audio/', 'application/pdf',
+  'application/zip', 'application/x-zip', 'application/gzip',
+  'application/msword', 'application/vnd.openxmlformats',
+  'application/vnd.ms-', 'text/plain', 'text/csv',
+];
+
+// ─── Utils ────────────────────────────────────────────────────────────────────
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB';
 }
 
-// ─── File selection ───────────────────────────────────────────────────────────
-const dropZone = document.getElementById('drop-zone');
-const fileInput = document.getElementById('file-input');
-
-dropZone?.addEventListener('click', () => fileInput?.click());
-dropZone?.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
-dropZone?.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-dropZone?.addEventListener('drop', e => {
-  e.preventDefault();
-  dropZone.classList.remove('drag-over');
-  const f = e.dataTransfer.files[0];
-  if (f) handleFile(f);
-});
-fileInput?.addEventListener('change', () => {
-  if (fileInput.files[0]) handleFile(fileInput.files[0]);
-});
-
-async function handleFile(file) {
-  selectedFile = file;
-  fileHash = null;
-  draftId = null;
-
-  // Show file info
-  document.getElementById('file-name').textContent = file.name;
-  document.getElementById('file-size').textContent = formatBytes(file.size);
-  document.getElementById('file-type-text').textContent = file.type || 'unknown';
-  document.getElementById('file-info').style.display = '';
-  dropZone.style.display = 'none';
-
-  // Preview
-  renderPreview(file);
-
-  // Hash
-  document.getElementById('hash-status').textContent = 'Generating fingerprint...';
-  document.getElementById('hash-box').style.display = '';
-  try {
-    fileHash = await sha256File(file);
-    document.getElementById('hash-status').textContent = 'File fingerprint generated';
-    document.getElementById('hash-value').textContent = fileHash;
-    document.getElementById('hash-display').style.display = '';
-    document.getElementById('btn-next').disabled = false;
-  } catch (e) {
-    document.getElementById('hash-status').textContent = 'Failed to generate fingerprint. Try again.';
-  }
-
-  // Default title
-  const titleInput = document.getElementById('title');
-  if (titleInput && !titleInput.value) {
-    titleInput.value = file.name.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
-  }
+function isAllowedType(mimeType) {
+  return ALLOWED_TYPES.some(t => mimeType.startsWith(t));
 }
+
+async function hashFileSHA256(file) {
+  const buffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function authHeaders() {
+  const token = localStorage.getItem('fp_token');
+  return token ? { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+}
+
+// ─── UI helpers ───────────────────────────────────────────────────────────────
+
+function setStep(msg, type = 'progress') {
+  const el = document.getElementById('fp-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = `fp-status fp-status--${type}`;
+  el.style.display = 'block';
+}
+
+function setError(msg) {
+  setStep(msg, 'error');
+  setProgress(0);
+  document.getElementById('fp-submit-btn').disabled = false;
+  document.getElementById('fp-submit-btn').textContent = 'Create Proof';
+}
+
+function setProgress(pct) {
+  const bar = document.getElementById('fp-progress-bar');
+  if (!bar) return;
+  bar.style.width = pct + '%';
+  bar.parentElement.style.display = pct > 0 ? 'block' : 'none';
+}
+
+function showRecovery(draftId) {
+  const el = document.getElementById('fp-recovery');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="fp-recovery-box">
+      <strong>Your file was uploaded, but the proof record could not be completed.</strong><br>
+      Please retry completing the proof.<br><br>
+      Recovery code: <code>${draftId}</code>
+    </div>
+  `;
+  el.style.display = 'block';
+}
+
+// ─── Preview ──────────────────────────────────────────────────────────────────
 
 function renderPreview(file) {
-  const container = document.getElementById('file-preview');
+  const container = document.getElementById('fp-preview');
   if (!container) return;
   container.innerHTML = '';
-  const mime = file.type;
-  if (mime.startsWith('image/')) {
-    const url = URL.createObjectURL(file);
-    container.innerHTML = `<img src="${url}" style="max-width:100%;max-height:260px;border-radius:8px;object-fit:contain;">`;
-  } else if (mime.startsWith('video/')) {
-    const url = URL.createObjectURL(file);
-    container.innerHTML = `<video src="${url}" controls style="max-width:100%;max-height:260px;border-radius:8px;"></video>`;
-  } else if (mime.startsWith('audio/')) {
-    const url = URL.createObjectURL(file);
-    container.innerHTML = `<audio src="${url}" controls style="width:100%;margin-top:8px;"></audio>`;
+
+  const url = URL.createObjectURL(file);
+  let el;
+
+  if (file.type.startsWith('image/')) {
+    el = document.createElement('img');
+    el.src = url;
+    el.style.cssText = 'max-width:100%;max-height:280px;border-radius:6px;display:block';
+  } else if (file.type.startsWith('video/')) {
+    el = document.createElement('video');
+    el.src = url;
+    el.controls = true;
+    el.style.cssText = 'max-width:100%;max-height:280px;border-radius:6px;display:block';
+  } else if (file.type.startsWith('audio/')) {
+    el = document.createElement('audio');
+    el.src = url;
+    el.controls = true;
+    el.style.cssText = 'width:100%';
+  } else if (file.type === 'application/pdf') {
+    el = document.createElement('iframe');
+    el.src = url;
+    el.style.cssText = 'width:100%;height:260px;border:none;border-radius:6px';
   } else {
-    container.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-size:32px;">${fileIcon(mime)}<br><span style="font-size:13px">No preview available</span></div>`;
+    container.innerHTML = `<div class="fp-no-preview"><i class="ti ti-file"></i><p>No preview available</p><p class="text-muted text-sm">${file.type || 'Unknown type'}</p></div>`;
+    return;
   }
+  container.appendChild(el);
 }
 
-function changeFile() {
-  selectedFile = null;
-  fileHash = null;
-  draftId = null;
-  document.getElementById('file-info').style.display = 'none';
-  document.getElementById('file-preview').innerHTML = '';
-  dropZone.style.display = '';
-  document.getElementById('hash-box').style.display = 'none';
-  document.getElementById('hash-display').style.display = 'none';
-  document.getElementById('btn-next').disabled = true;
-  if (fileInput) fileInput.value = '';
-}
+// ─── Main flow ────────────────────────────────────────────────────────────────
 
-document.getElementById('btn-next')?.addEventListener('click', () => {
-  if (!selectedFile || !fileHash) return;
-  setStep('metadata');
-});
-
-document.getElementById('btn-back')?.addEventListener('click', () => {
-  setStep('select');
-});
-
-// ─── Submit ───────────────────────────────────────────────────────────────────
-document.getElementById('form-metadata')?.addEventListener('submit', async e => {
-  e.preventDefault();
-  await submitProof();
-});
-
-async function submitProof() {
-  if (!selectedFile || !fileHash) return;
-
-  setStep('submitting');
-  const steps = [
-    'Generating fingerprint...',
-    'Creating proof draft...',
-    'Uploading original file to storage...',
-    'Saving proof record...',
-    'Done.',
-  ];
-
-  const statusEl = document.getElementById('submit-status');
-  const progressFill = document.getElementById('submit-progress');
-  const errorEl = document.getElementById('submit-error');
-
-  function setStatus(i, total) {
-    if (statusEl) statusEl.textContent = steps[i];
-    if (progressFill) progressFill.style.width = `${Math.round((i / (total - 1)) * 100)}%`;
-  }
-
-  errorEl.style.display = 'none';
-  setStatus(0, steps.length);
+async function createProofFlow(file, form) {
+  let draftId = null;
 
   try {
-    // Step 1: Build form data with file + hash
-    setStatus(1, steps.length);
-    const formData = new FormData();
-    formData.append('file', selectedFile);
-    formData.append('client_hash', fileHash);
+    // Step 1: Hash
+    setStep('Generating file fingerprint...', 'progress');
+    setProgress(10);
+    const sha256Hash = await hashFileSHA256(file);
 
-    // Step 2: Upload file (creates draft)
-    setStatus(2, steps.length);
-    const token = localStorage.getItem('fp_token');
-    const uploadRes = await fetch('/api/proofs/draft', {
+    document.getElementById('fp-hash-display')
+      && (document.getElementById('fp-hash-display').textContent = sha256Hash);
+
+    // Step 2: Create draft
+    setStep('Creating proof draft...', 'progress');
+    setProgress(20);
+
+    const draftRes = await fetch('/api/proofs/draft', {
       method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      body: formData,
-    });
-    if (!uploadRes.ok) {
-      const err = await uploadRes.json().catch(() => ({}));
-      throw new Error(err.error || 'Upload failed');
-    }
-    draftData = await uploadRes.json();
-    draftId = draftData.draftId;
-
-    // Step 3: Complete proof with metadata
-    setStatus(3, steps.length);
-    const title = document.getElementById('title')?.value?.trim();
-    const description = document.getElementById('description')?.value?.trim();
-    const category = document.getElementById('category')?.value?.trim();
-    const tagsRaw = document.getElementById('tags')?.value?.trim();
-    const visibility = document.getElementById('visibility')?.value || 'public';
-    const event_date = document.getElementById('event-date')?.value || '';
-    const location_text = document.getElementById('location')?.value?.trim() || '';
-    const collection_id = document.getElementById('collection-id')?.value?.trim() || '';
-    const submitter_type = getUser() ? 'account' : 'anonymous';
-
-    const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
-
-    const complete = await api(`/proofs/${draftId}/complete`, {
-      method: 'POST',
+      headers: authHeaders(),
       body: JSON.stringify({
-        title, description, category, tags, visibility,
-        event_date: event_date || undefined,
-        location_text: location_text || undefined,
-        collection_id: collection_id || undefined,
-        submitter_type,
-        sha256Hash: fileHash,
-        shelbyBlobId: draftData.shelbyBlobId,
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type || 'application/octet-stream',
+        sha256Hash,
       }),
     });
 
-    setStatus(4, steps.length);
+    if (!draftRes.ok) {
+      const e = await draftRes.json().catch(() => ({}));
+      throw new Error(e.error || 'Draft creation failed');
+    }
 
-    // Done
-    document.getElementById('done-proof-link').href = complete.proofUrl;
-    document.getElementById('done-proof-link').textContent = window.location.origin + complete.proofUrl;
-    document.getElementById('done-proof-id').textContent = complete.proofId;
-    setStep('done');
+    const draft = await draftRes.json();
+    draftId = draft.draftId;
+
+    // Step 3: Get upload session
+    setStep('Preparing upload...', 'progress');
+    setProgress(30);
+
+    const sessionRes = await fetch('/api/storage/upload-session', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        draftId,
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type || 'application/octet-stream',
+        sha256Hash,
+      }),
+    });
+
+    if (!sessionRes.ok) {
+      const e = await sessionRes.json().catch(() => ({}));
+      throw new Error(e.error || 'Could not prepare upload session');
+    }
+
+    const session = await sessionRes.json();
+
+    // Step 4: Upload file to Shelby or local endpoint
+    setStep('Uploading file to storage...', 'progress');
+    setProgress(40);
+
+    const uploadUrl = session.uploadUrl.startsWith('http')
+      ? session.uploadUrl
+      : window.location.origin + session.uploadUrl;
+
+    const uploadRes = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+    });
+
+    if (!uploadRes.ok) {
+      throw new Error('File upload to storage failed');
+    }
+
+    setProgress(65);
+
+    // Step 5: Confirm upload, get blob ID
+    setStep('Confirming upload...', 'progress');
+
+    let shelbyBlobId, storageProvider, storageUri;
+
+    if (session.storageProvider === 'local') {
+      // Local upload endpoint returns blob info directly
+      const uploadData = await uploadRes.json().catch(() => null);
+      if (uploadData && uploadData.shelbyBlobId) {
+        shelbyBlobId = uploadData.shelbyBlobId;
+        storageProvider = uploadData.storageProvider;
+        storageUri = uploadData.storageUri;
+      } else {
+        shelbyBlobId = `local://${session._localTempName}`;
+        storageProvider = 'local';
+        storageUri = shelbyBlobId;
+      }
+    } else {
+      // Shelby: confirm session
+      const confirmRes = await fetch('/api/storage/confirm-upload', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          uploadSessionId: session.uploadSessionId,
+          localTempName: session._localTempName,
+        }),
+      });
+
+      if (!confirmRes.ok) {
+        const e = await confirmRes.json().catch(() => ({}));
+        throw new Error(e.error || 'Upload confirmation failed');
+      }
+
+      const confirmed = await confirmRes.json();
+      shelbyBlobId = confirmed.shelbyBlobId;
+      storageProvider = confirmed.storageProvider;
+      storageUri = confirmed.storageUri;
+    }
+
+    setProgress(75);
+
+    // Step 6: Complete proof
+    setStep('Saving proof record...', 'progress');
+
+    const completeRes = await fetch(`/api/proofs/${draftId}/complete`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        title: form.title,
+        description: form.description || null,
+        category: form.category || null,
+        tags: form.tags || [],
+        visibility: form.visibility || 'public',
+        eventDate: form.eventDate || null,
+        locationText: form.locationText || null,
+        submitterType: form.submitterType || 'anonymous',
+        sha256Hash,
+        shelbyBlobId,
+        storageUri: storageUri || shelbyBlobId,
+        collection_id: form.collectionId || null,
+      }),
+    });
+
+    if (!completeRes.ok) {
+      const e = await completeRes.json().catch(() => ({}));
+      showRecovery(draftId);
+      throw new Error(e.error || 'Metadata save failed');
+    }
+
+    setProgress(100);
+    setStep('Proof created!', 'success');
+
+    const complete = await completeRes.json();
+    setTimeout(() => {
+      window.location.href = complete.proofUrl;
+    }, 600);
 
   } catch (err) {
-    setStep('submitting');
-    errorEl.style.display = '';
-
-    // Recovery UI if draft was created but complete failed
-    if (draftId) {
-      errorEl.innerHTML = `
-        <strong>Upload succeeded, but the proof record could not be saved.</strong><br>
-        Your file was uploaded. Please retry completing the proof.<br>
-        Recovery code: <code style="font-family:monospace">${draftId}</code>
-        <br><br>
-        <button class="btn btn-primary btn-sm" onclick="retryComplete()">Retry</button>
-      `;
-    } else {
-      errorEl.textContent = err.message;
-    }
+    console.error('createProofFlow error:', err);
+    setError(err.message || 'Something went wrong');
+    if (draftId) showRecovery(draftId);
   }
 }
 
-async function retryComplete() {
-  if (!draftId) return;
-  // Just re-call submit flow from metadata step
-  document.getElementById('submit-error').style.display = 'none';
-  await submitProof();
-}
-
-function copyProofLink() {
-  const link = document.getElementById('done-proof-link')?.href;
-  if (link) {
-    navigator.clipboard.writeText(link).then(() => {
-      const btn = document.querySelector('[onclick="copyProofLink()"]');
-      if (btn) { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy link', 2000); }
-    });
-  }
-}
-
-// Load user's collections for the selector
-async function loadCollections() {
-  const user = getUser();
-  const sel = document.getElementById('collection-id');
-  if (!sel || !user) return;
-  try {
-    const cols = await api('/collections/user/mine');
-    if (cols.length === 0) return;
-    sel.innerHTML = '<option value="">No collection</option>' +
-      cols.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
-    document.getElementById('collection-group').style.display = '';
-  } catch {}
-}
+// ─── Init ─────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
-  setStep('select');
-  document.getElementById('btn-next').disabled = true;
-  document.getElementById('hash-box').style.display = 'none';
-  document.getElementById('hash-display').style.display = 'none';
-  document.getElementById('file-info').style.display = 'none';
-  loadCollections();
+  const fileInput = document.getElementById('fp-file-input');
+  const dropZone = document.getElementById('fp-dropzone');
+  const form = document.getElementById('fp-create-form');
+
+  let selectedFile = null;
+  let sha256Cache = null;
+
+  function handleFile(file) {
+    if (!file) return;
+
+    if (!isAllowedType(file.type)) {
+      setError(`Unsupported file type: ${file.type}`);
+      return;
+    }
+
+    if (file.size > MAX_FILE_SIZE) {
+      setError(`File too large: ${formatBytes(file.size)}. Max is ${formatBytes(MAX_FILE_SIZE)}.`);
+      return;
+    }
+
+    selectedFile = file;
+    sha256Cache = null;
+
+    // Show file info
+    const info = document.getElementById('fp-file-info');
+    if (info) {
+      info.innerHTML = `
+        <div class="fp-file-meta">
+          <span class="fp-file-name">${file.name}</span>
+          <span class="fp-file-size text-muted">${formatBytes(file.size)}</span>
+          <span class="fp-file-type text-muted">${file.type || 'unknown'}</span>
+        </div>
+      `;
+      info.style.display = 'block';
+    }
+
+    renderPreview(file);
+
+    // Auto-fill title from filename
+    const titleInput = document.getElementById('fp-title');
+    if (titleInput && !titleInput.value) {
+      titleInput.value = file.name.replace(/\.[^/.]+$/, '');
+    }
+
+    // Start hashing in background
+    setStep('Generating file fingerprint...', 'progress');
+    hashFileSHA256(file).then(hash => {
+      sha256Cache = hash;
+      const el = document.getElementById('fp-hash-display');
+      if (el) {
+        el.textContent = hash;
+        el.parentElement.style.display = 'block';
+      }
+      setStep('File fingerprint generated. Fill in details and create proof.', 'success');
+    }).catch(() => {
+      setStep('Could not generate fingerprint. Please try again.', 'error');
+    });
+  }
+
+  // File input change
+  fileInput?.addEventListener('change', (e) => {
+    handleFile(e.target.files[0]);
+  });
+
+  // Drag & drop
+  dropZone?.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZone.classList.add('dragging');
+  });
+  dropZone?.addEventListener('dragleave', () => dropZone.classList.remove('dragging'));
+  dropZone?.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragging');
+    handleFile(e.dataTransfer.files[0]);
+  });
+  dropZone?.addEventListener('click', () => fileInput?.click());
+
+  // Form submit
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!selectedFile) { setError('Please select a file first'); return; }
+
+    const btn = document.getElementById('fp-submit-btn');
+    btn.disabled = true;
+    btn.textContent = 'Creating...';
+
+    const tagsRaw = document.getElementById('fp-tags')?.value || '';
+    const tags = tagsRaw.split(',').map(t => t.trim()).filter(Boolean);
+
+    const formData = {
+      title: document.getElementById('fp-title')?.value?.trim() || selectedFile.name,
+      description: document.getElementById('fp-description')?.value?.trim() || '',
+      category: document.getElementById('fp-category')?.value || '',
+      tags,
+      visibility: document.getElementById('fp-visibility')?.value || 'public',
+      eventDate: document.getElementById('fp-event-date')?.value || '',
+      locationText: document.getElementById('fp-location')?.value?.trim() || '',
+      submitterType: localStorage.getItem('fp_token') ? 'account' : 'anonymous',
+      collectionId: document.getElementById('fp-collection')?.value || '',
+    };
+
+    await createProofFlow(selectedFile, formData);
+  });
 });

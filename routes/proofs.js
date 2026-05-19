@@ -1,51 +1,49 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../database/db');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const storage = require('../services/storage/shelbyStorage');
+const config = require('../config/env');
 
-const uploadDir = path.join(__dirname, '../uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+// ─── Constants ────────────────────────────────────────────────────────────────
+const ALLOWED_TYPES = [
+  'image/', 'video/', 'audio/', 'application/pdf',
+  'application/zip', 'application/x-zip', 'application/gzip',
+  'application/msword', 'application/vnd.openxmlformats',
+  'application/vnd.ms-', 'text/plain', 'text/csv',
+];
 
-const multerStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, uuidv4() + ext);
-  }
-});
+const VALID_VISIBILITY = ['public', 'unlisted', 'private'];
+const VALID_SUBMITTER = ['anonymous', 'account', 'wallet'];
+const VALID_SORT = { newest: 'p.created_at DESC', useful: 'p.useful_count DESC', discussed: 'p.comment_count DESC', views: 'p.view_count DESC' };
 
-const upload = multer({
-  storage: multerStorage,
-  limits: { fileSize: (parseInt(process.env.UPLOAD_MAX_MB) || 200) * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    const allowed = [
-      'image/', 'video/', 'audio/', 'application/pdf',
-      'application/zip', 'application/x-zip', 'application/gzip',
-      'application/msword', 'application/vnd.openxmlformats',
-      'application/vnd.ms-', 'text/plain', 'text/csv',
-    ];
-    const ok = allowed.some(t => file.mimetype.startsWith(t));
-    cb(ok ? null : new Error('File type not supported'), ok);
-  }
-});
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function validateFileType(mimeType) {
+  return ALLOWED_TYPES.some(t => mimeType.startsWith(t));
+}
 
-function hashFile(filePath) {
+function validateSHA256(hash) {
+  return /^[a-f0-9]{64}$/i.test(hash);
+}
+
+function canViewProof(user, proof) {
+  if (proof.visibility === 'public' || proof.visibility === 'unlisted') return true;
+  if (proof.visibility === 'private') return user && user.id === proof.owner_id;
+  return false;
+}
+
+function hashStream(stream) {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
-    const stream = fs.createReadStream(filePath);
     stream.on('data', d => hash.update(d));
     stream.on('end', () => resolve(hash.digest('hex')));
     stream.on('error', reject);
   });
 }
 
-function updateCommunityCounts(proofId) {
+function recalcCommunityStatus(proofId) {
   const proof = db.prepare('SELECT id, flag_count FROM proofs WHERE id = ?').get(proofId);
   if (!proof) return;
   let community_status = 'normal';
@@ -55,11 +53,12 @@ function updateCommunityCounts(proofId) {
   db.prepare(`UPDATE proofs SET community_status = ? WHERE id = ?`).run(community_status, proofId);
 }
 
-// ─── LIST public proofs ──────────────────────────────────────────────────────
+// ─── LIST public proofs ───────────────────────────────────────────────────────
 router.get('/', optionalAuth, (req, res) => {
   try {
     const { page = 1, limit = 20, category, search, collection_id, sort = 'newest' } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (Math.max(1, parseInt(page)) - 1) * Math.min(100, parseInt(limit));
+    const lim = Math.min(100, parseInt(limit) || 20);
 
     let where = `p.status = 'active' AND p.visibility = 'public' AND p.community_status != 'hidden_by_filter'`;
     const params = [];
@@ -69,8 +68,7 @@ router.get('/', optionalAuth, (req, res) => {
     if (collection_id) { where += ` AND cp.collection_id = ?`; params.push(collection_id); }
 
     const joinClause = collection_id ? `JOIN collection_proofs cp ON p.id = cp.proof_id` : '';
-    const orderMap = { newest: 'p.created_at DESC', useful: 'p.useful_count DESC', discussed: 'p.comment_count DESC', views: 'p.view_count DESC' };
-    const order = orderMap[sort] || 'p.created_at DESC';
+    const order = VALID_SORT[sort] || VALID_SORT.newest;
 
     const proofs = db.prepare(`
       SELECT p.id, p.title, p.file_name, p.file_type, p.file_size, p.category,
@@ -84,97 +82,122 @@ router.get('/', optionalAuth, (req, res) => {
       WHERE ${where}
       ORDER BY ${order}
       LIMIT ? OFFSET ?
-    `).all(...params, parseInt(limit), parseInt(offset));
+    `).all(...params, lim, offset);
 
     const total = db.prepare(`SELECT COUNT(*) as c FROM proofs p ${joinClause} WHERE ${where}`).get(...params).c;
-    res.json({ proofs, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) });
+
+    res.json({
+      proofs: proofs.map(p => ({ ...p, tags: JSON.parse(p.tags || '[]') })),
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / lim),
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// ─── CREATE DRAFT ────────────────────────────────────────────────────────────
-router.post('/draft', optionalAuth, upload.single('file'), async (req, res) => {
+// ─── CREATE DRAFT ─────────────────────────────────────────────────────────────
+// POST /api/proofs/draft
+// Body: { fileName, fileSize, fileType, sha256Hash }
+router.post('/draft', optionalAuth, (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const { fileName, fileSize, fileType, sha256Hash } = req.body;
 
-    const { client_hash } = req.body;
-    const sha256_hash = await hashFile(req.file.path);
-
-    if (client_hash && client_hash !== sha256_hash) {
-      fs.unlinkSync(req.file.path);
-      return res.status(400).json({ error: 'File hash mismatch — upload may be corrupted' });
+    if (!fileName || !fileSize || !fileType || !sha256Hash) {
+      return res.status(400).json({ error: 'fileName, fileSize, fileType, sha256Hash required' });
     }
 
-    // Register with storage layer
-    const { shelbyBlobId, storageProvider, storageUri } = await storage.registerUpload({
-      localFilePath: req.file.path,
-      fileName: req.file.originalname,
-      fileType: req.file.mimetype,
-      fileSize: req.file.size,
-    });
+    if (!validateSHA256(sha256Hash)) {
+      return res.status(400).json({ error: 'Invalid sha256Hash — must be 64 hex characters' });
+    }
+
+    if (!validateFileType(fileType)) {
+      return res.status(400).json({ error: `Unsupported file type: ${fileType}` });
+    }
+
+    if (Number(fileSize) > config.maxFileSize) {
+      return res.status(400).json({ error: `File too large. Max: ${config.maxFileSize / 1024 / 1024}MB` });
+    }
 
     const id = uuidv4();
-    const owner_id = req.user?.id || null;
+    const now = new Date().toISOString();
 
     db.prepare(`
       INSERT INTO proofs (
         id, owner_id, title, file_name, file_size, file_type,
-        sha256_hash, shelby_blob_id, storage_provider, storage_uri,
-        status, submitter_type
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)
+        sha256_hash, storage_provider, visibility, submitter_type,
+        status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      id, owner_id,
-      req.file.originalname, // temp title = filename
-      req.file.originalname,
-      req.file.size,
-      req.file.mimetype,
-      sha256_hash,
-      shelbyBlobId,
-      storageProvider,
-      storageUri || null,
-      owner_id ? 'account' : 'anonymous'
+      id,
+      req.user?.id || null,
+      'Untitled proof',
+      fileName,
+      Number(fileSize),
+      fileType,
+      sha256Hash,
+      'shelby',
+      'unlisted',
+      req.user ? 'account' : 'anonymous',
+      'draft',
+      now,
+      now,
     );
 
-    res.json({
-      draftId: id,
-      sha256Hash: sha256_hash,
-      shelbyBlobId,
-      storageProvider,
-      fileName: req.file.originalname,
-      fileSize: req.file.size,
-      fileType: req.file.mimetype,
-    });
+    res.json({ draftId: id, status: 'draft' });
   } catch (e) {
-    if (req.file?.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
     res.status(500).json({ error: e.message });
   }
 });
 
-// ─── COMPLETE PROOF ──────────────────────────────────────────────────────────
+// ─── COMPLETE PROOF ───────────────────────────────────────────────────────────
+// POST /api/proofs/:id/complete
 router.post('/:id/complete', optionalAuth, async (req, res) => {
   try {
-    const draft = db.prepare('SELECT * FROM proofs WHERE id = ? AND status = ?').get(req.params.id, 'draft');
-    if (!draft) return res.status(404).json({ error: 'Draft not found or already completed' });
+    const draft = db.prepare('SELECT * FROM proofs WHERE id = ?').get(req.params.id);
+    if (!draft) return res.status(404).json({ error: 'Draft not found' });
+    if (draft.status !== 'draft') return res.status(400).json({ error: 'Proof is not a draft' });
 
-    if (draft.owner_id && req.user?.id !== draft.owner_id) {
-      return res.status(403).json({ error: 'Forbidden' });
+    if (draft.owner_id && draft.owner_id !== req.user?.id) {
+      return res.status(403).json({ error: 'Access denied' });
     }
 
     const {
       title, description, category, tags, visibility,
-      event_date, location_text, latitude, longitude,
-      submitter_type, wallet_address, wallet_signature,
-      collection_id,
+      eventDate, location_text, locationText,
+      sha256Hash, shelbyBlobId, storageUri,
+      submitterType, collection_id,
+      wallet_address, wallet_signature,
     } = req.body;
 
-    if (!title) return res.status(400).json({ error: 'Title is required' });
+    if (!title || title.trim().length === 0) {
+      return res.status(400).json({ error: 'Title is required' });
+    }
 
-    const validVisibility = ['public', 'unlisted', 'private'];
-    const vis = validVisibility.includes(visibility) ? visibility : 'public';
+    if (!VALID_VISIBILITY.includes(visibility)) {
+      return res.status(400).json({ error: 'visibility must be public, unlisted, or private' });
+    }
 
-    const validSubmitterType = ['anonymous', 'account', 'wallet'];
-    const subType = validSubmitterType.includes(submitter_type) ? submitter_type : 'anonymous';
+    const subType = VALID_SUBMITTER.includes(submitterType) ? submitterType : 'anonymous';
+
+    if (sha256Hash && sha256Hash !== draft.sha256_hash) {
+      return res.status(400).json({ error: 'Hash mismatch with draft record' });
+    }
+
+    if (!shelbyBlobId) {
+      return res.status(400).json({ error: 'shelbyBlobId is required — upload the file first' });
+    }
+
+    // Verify blob exists in storage
+    const meta = await storage.getBlobMetadata({ shelbyBlobId });
+    if (!meta.exists) {
+      return res.status(400).json({ error: 'Blob not found in storage — upload may have failed' });
+    }
+
+    const normalizedTags = Array.isArray(tags) ? tags : (tags ? String(tags).split(',').map(t => t.trim()).filter(Boolean) : []);
+    const locText = locationText || location_text || null;
+    const now = new Date().toISOString();
 
     db.prepare(`
       UPDATE proofs SET
@@ -185,99 +208,102 @@ router.post('/:id/complete', optionalAuth, async (req, res) => {
         visibility = ?,
         event_date = ?,
         location_text = ?,
-        latitude = ?,
-        longitude = ?,
+        shelby_blob_id = ?,
+        storage_uri = ?,
+        storage_provider = 'shelby',
         submitter_type = ?,
         wallet_address = ?,
         wallet_signature = ?,
         status = 'active',
-        updated_at = datetime('now')
+        updated_at = ?
       WHERE id = ?
     `).run(
-      title,
+      title.trim(),
       description || null,
       category || null,
-      JSON.stringify(Array.isArray(tags) ? tags : (tags ? tags.split(',').map(t => t.trim()) : [])),
-      vis,
-      event_date || null,
-      location_text || null,
-      latitude ? parseFloat(latitude) : null,
-      longitude ? parseFloat(longitude) : null,
+      JSON.stringify(normalizedTags),
+      visibility,
+      eventDate || null,
+      locText,
+      shelbyBlobId,
+      storageUri || shelbyBlobId,
       subType,
       wallet_address || null,
       wallet_signature || null,
-      draft.id
+      now,
+      draft.id,
     );
 
+    // Add to collection if provided
     if (collection_id) {
       const col = db.prepare('SELECT * FROM collections WHERE id = ?').get(collection_id);
       if (col) {
         const exists = db.prepare('SELECT id FROM collection_proofs WHERE collection_id = ? AND proof_id = ?').get(collection_id, draft.id);
         if (!exists) {
-          const status = col.owner_id === req.user?.id || !col.require_approval ? 'approved' : 'pending';
-          db.prepare('INSERT INTO collection_proofs (id, collection_id, proof_id, status, added_by_user_id) VALUES (?, ?, ?, ?, ?)')
-            .run(uuidv4(), collection_id, draft.id, status, req.user?.id || null);
+          const cpStatus = col.owner_id === req.user?.id || !col.require_approval ? 'approved' : 'pending';
+          db.prepare(`INSERT INTO collection_proofs (id, collection_id, proof_id, status, added_by_user_id, added_at) VALUES (?, ?, ?, ?, ?, ?)`)
+            .run(uuidv4(), collection_id, draft.id, cpStatus, req.user?.id || null, now);
         }
       }
     }
 
-    // Update owner's reputation proof count
+    // Update reputation
     if (draft.owner_id) {
       db.prepare(`
-        INSERT INTO user_reputation (user_id, proof_count) VALUES (?, 1)
-        ON CONFLICT(user_id) DO UPDATE SET proof_count = proof_count + 1, updated_at = datetime('now')
-      `).run(draft.owner_id);
+        INSERT INTO user_reputation (user_id, proof_count, updated_at) VALUES (?, 1, ?)
+        ON CONFLICT(user_id) DO UPDATE SET proof_count = proof_count + 1, updated_at = excluded.updated_at
+      `).run(draft.owner_id, now);
     }
 
-    res.json({ proofId: draft.id, proofUrl: `/proof.html?id=${draft.id}` });
+    res.json({
+      proofId: draft.id,
+      proofUrl: `/proof.html?id=${draft.id}`,
+      status: 'active',
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// ─── GET PROOF ───────────────────────────────────────────────────────────────
-router.get('/:id', optionalAuth, (req, res) => {
+// ─── GET PROOF ────────────────────────────────────────────────────────────────
+router.get('/:id', optionalAuth, async (req, res) => {
   try {
     const proof = db.prepare(`
-      SELECT p.*, u.display_name as owner_name, u.email as owner_email
+      SELECT p.*, u.display_name as owner_name
       FROM proofs p LEFT JOIN users u ON p.owner_id = u.id
       WHERE p.id = ?
     `).get(req.params.id);
 
     if (!proof) return res.status(404).json({ error: 'Proof not found' });
-    if (proof.status === 'draft') return res.status(403).json({ error: 'This proof is not yet published' });
-    if (proof.status === 'removed_from_app') return res.status(404).json({ error: 'This proof is no longer available' });
-    if (proof.visibility === 'private') {
-      if (!req.user || req.user.id !== proof.owner_id)
-        return res.status(403).json({ error: 'This proof is private' });
+    if (proof.status === 'draft') return res.status(403).json({ error: 'This proof has not been published yet' });
+    if (proof.status === 'removed_from_app_view') return res.status(404).json({ error: 'This proof is no longer available' });
+
+    if (!canViewProof(req.user, proof)) {
+      return res.status(403).json({ error: 'This proof is private' });
     }
 
     db.prepare('UPDATE proofs SET view_count = view_count + 1 WHERE id = ?').run(proof.id);
     proof.tags = JSON.parse(proof.tags || '[]');
 
-    // Include user reaction if logged in
     if (req.user) {
       const reaction = db.prepare('SELECT type FROM proof_reactions WHERE proof_id = ? AND user_id = ?').get(proof.id, req.user.id);
       proof.my_reaction = reaction?.type || null;
     }
 
-    // Get download URL from storage layer
-    storage.getDownloadUrl({ shelbyBlobId: proof.shelby_blob_id || `local://${proof.file_path}` })
-      .then(url => {
-        proof.download_url = url;
-        delete proof.file_path;
-        res.json(proof);
-      })
-      .catch(() => {
-        delete proof.file_path;
-        res.json(proof);
-      });
+    // Attach download URL
+    try {
+      proof.download_url = await storage.getDownloadUrl({ shelbyBlobId: proof.shelby_blob_id });
+    } catch {
+      proof.download_url = null;
+    }
+
+    res.json(proof);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// ─── UPDATE PROOF ────────────────────────────────────────────────────────────
+// ─── UPDATE PROOF METADATA ────────────────────────────────────────────────────
 router.patch('/:id', authenticate, (req, res) => {
   try {
     const proof = db.prepare('SELECT * FROM proofs WHERE id = ?').get(req.params.id);
@@ -285,6 +311,11 @@ router.patch('/:id', authenticate, (req, res) => {
     if (proof.owner_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
 
     const { title, description, category, tags, visibility, event_date, location_text } = req.body;
+
+    if (visibility && !VALID_VISIBILITY.includes(visibility)) {
+      return res.status(400).json({ error: 'Invalid visibility value' });
+    }
+
     db.prepare(`
       UPDATE proofs SET
         title = COALESCE(?, title),
@@ -297,10 +328,14 @@ router.patch('/:id', authenticate, (req, res) => {
         updated_at = datetime('now')
       WHERE id = ?
     `).run(
-      title || null, description || null, category || null,
+      title || null,
+      description || null,
+      category || null,
       tags ? JSON.stringify(Array.isArray(tags) ? tags : [tags]) : null,
-      visibility || null, event_date || null, location_text || null,
-      proof.id
+      visibility || null,
+      event_date || null,
+      location_text || null,
+      proof.id,
     );
     res.json({ success: true });
   } catch (e) {
@@ -308,59 +343,101 @@ router.patch('/:id', authenticate, (req, res) => {
   }
 });
 
-// ─── REMOVE FROM APP ─────────────────────────────────────────────────────────
-router.delete('/:id/remove-from-app', authenticate, (req, res) => {
+// ─── REMOVE FROM APP VIEW ─────────────────────────────────────────────────────
+router.post('/:id/remove-from-app-view', authenticate, (req, res) => {
   try {
     const proof = db.prepare('SELECT * FROM proofs WHERE id = ?').get(req.params.id);
     if (!proof) return res.status(404).json({ error: 'Not found' });
     if (proof.owner_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
-    db.prepare(`UPDATE proofs SET status = 'removed_from_app', updated_at = datetime('now') WHERE id = ?`).run(proof.id);
-    res.json({ success: true });
+    db.prepare(`UPDATE proofs SET status = 'removed_from_app_view', updated_at = datetime('now') WHERE id = ?`).run(proof.id);
+    res.json({ success: true, message: 'Proof removed from app view. The file remains preserved in storage.' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// ─── DOWNLOAD ────────────────────────────────────────────────────────────────
+// ─── DOWNLOAD ─────────────────────────────────────────────────────────────────
 router.get('/:id/download', optionalAuth, async (req, res) => {
   try {
-    const proof = db.prepare('SELECT * FROM proofs WHERE id = ? AND status = ?').get(req.params.id, 'active');
-    if (!proof) return res.status(404).json({ error: 'Not found' });
-    if (proof.visibility === 'private' && (!req.user || req.user.id !== proof.owner_id))
-      return res.status(403).json({ error: 'Private' });
+    const proof = db.prepare('SELECT * FROM proofs WHERE id = ?').get(req.params.id);
+    if (!proof || proof.status !== 'active') return res.status(404).json({ error: 'Proof not found' });
+    if (!canViewProof(req.user, proof)) return res.status(403).json({ error: 'Access denied' });
 
-    const blobId = proof.shelby_blob_id || `local://${proof.file_path}`;
-    const stream = await storage.getBlobStream({ shelbyBlobId: blobId });
+    if (!proof.shelby_blob_id) return res.status(404).json({ error: 'No storage blob linked to this proof' });
 
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(proof.file_name)}"`);
-    res.setHeader('Content-Type', proof.file_type);
-    if (proof.file_size) res.setHeader('Content-Length', proof.file_size);
+    // Try redirect to signed URL first (faster for large files)
+    try {
+      const downloadUrl = await storage.getDownloadUrl({ shelbyBlobId: proof.shelby_blob_id });
+      // If it's an internal path, serve directly; if external URL, redirect
+      if (downloadUrl.startsWith('http')) {
+        return res.redirect(302, downloadUrl);
+      }
+      // Local: stream the file
+    } catch {}
 
-    if (stream.pipe) {
+    // Stream fallback
+    try {
+      const stream = await storage.getBlobStream({ shelbyBlobId: proof.shelby_blob_id });
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(proof.file_name)}"`);
+      res.setHeader('Content-Type', proof.file_type || 'application/octet-stream');
+      if (proof.file_size) res.setHeader('Content-Length', proof.file_size);
       stream.pipe(res);
-    } else {
-      // Web ReadableStream (Shelby response)
-      const { Readable } = require('stream');
-      Readable.fromWeb(stream).pipe(res);
+    } catch (e) {
+      res.status(500).json({ error: 'Could not retrieve file from storage' });
     }
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// ─── SERVE BLOB (local storage) ───────────────────────────────────────────────
-router.get('/blob/:filename', (req, res) => {
+// ─── VERIFY STORAGE ───────────────────────────────────────────────────────────
+// POST /api/proofs/:id/verify-storage
+// Backend fetches blob from Shelby, hashes it, compares with stored SHA-256
+router.post('/:id/verify-storage', optionalAuth, async (req, res) => {
   try {
-    const filename = path.basename(req.params.filename);
-    const filePath = path.join(uploadDir, filename);
-    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
-    res.sendFile(filePath);
+    const proof = db.prepare('SELECT * FROM proofs WHERE id = ?').get(req.params.id);
+    if (!proof || proof.status !== 'active') return res.status(404).json({ error: 'Proof not found' });
+    if (!canViewProof(req.user, proof)) return res.status(403).json({ error: 'Access denied' });
+
+    if (!proof.shelby_blob_id) {
+      return res.status(400).json({ error: 'No storage blob linked to this proof' });
+    }
+
+    const stream = await storage.getBlobStream({ shelbyBlobId: proof.shelby_blob_id });
+    const storageHash = await hashStream(stream);
+    const match = storageHash === proof.sha256_hash;
+
+    res.json({
+      proofId: proof.id,
+      storedHash: proof.sha256_hash,
+      storageHash,
+      match,
+      message: match
+        ? 'The file served from storage matches the original proof record.'
+        : 'Warning: The file served from storage does not match the original proof record.',
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// ─── REACTIONS (useful / question) ───────────────────────────────────────────
+// ─── USER'S OWN PROOFS ────────────────────────────────────────────────────────
+router.get('/user/mine', authenticate, (req, res) => {
+  try {
+    const proofs = db.prepare(`
+      SELECT id, title, file_name, file_type, file_size, visibility, status,
+             view_count, created_at, category, tags, useful_count, question_count,
+             comment_count, community_status, shelby_blob_id, storage_provider
+      FROM proofs WHERE owner_id = ? AND status != 'removed_from_app_view'
+      ORDER BY created_at DESC
+    `).all(req.user.id);
+    res.json(proofs.map(p => ({ ...p, tags: JSON.parse(p.tags || '[]') })));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── REACTIONS ────────────────────────────────────────────────────────────────
 router.get('/:id/reactions/summary', optionalAuth, (req, res) => {
   try {
     const proof = db.prepare('SELECT id, useful_count, question_count FROM proofs WHERE id = ?').get(req.params.id);
@@ -379,12 +456,13 @@ router.get('/:id/reactions/summary', optionalAuth, (req, res) => {
 router.post('/:id/reactions', authenticate, (req, res) => {
   try {
     const { type, reason } = req.body;
-    if (!['useful', 'question'].includes(type)) return res.status(400).json({ error: 'Invalid reaction type' });
+    if (!['useful', 'question'].includes(type)) return res.status(400).json({ error: 'type must be useful or question' });
 
     const proof = db.prepare('SELECT * FROM proofs WHERE id = ? AND status = ?').get(req.params.id, 'active');
     if (!proof) return res.status(404).json({ error: 'Not found' });
 
     const existing = db.prepare('SELECT * FROM proof_reactions WHERE proof_id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const now = new Date().toISOString();
 
     if (existing) {
       if (existing.type === type) {
@@ -393,17 +471,17 @@ router.post('/:id/reactions', authenticate, (req, res) => {
         db.prepare(`UPDATE proofs SET ${type}_count = MAX(0, ${type}_count - 1) WHERE id = ?`).run(req.params.id);
         return res.json({ success: true, action: 'removed', type: null });
       } else {
-        // Switch reaction
+        // Switch
         const oldType = existing.type;
-        db.prepare('UPDATE proof_reactions SET type = ?, reason = ?, updated_at = datetime("now") WHERE proof_id = ? AND user_id = ?')
-          .run(type, reason || null, req.params.id, req.user.id);
+        db.prepare('UPDATE proof_reactions SET type = ?, reason = ?, updated_at = ? WHERE proof_id = ? AND user_id = ?')
+          .run(type, reason || null, now, req.params.id, req.user.id);
         db.prepare(`UPDATE proofs SET ${oldType}_count = MAX(0, ${oldType}_count - 1), ${type}_count = ${type}_count + 1 WHERE id = ?`).run(req.params.id);
         return res.json({ success: true, action: 'switched', type });
       }
     }
 
-    db.prepare('INSERT INTO proof_reactions (id, proof_id, user_id, type, reason) VALUES (?, ?, ?, ?, ?)')
-      .run(uuidv4(), req.params.id, req.user.id, type, reason || null);
+    db.prepare('INSERT INTO proof_reactions (id, proof_id, user_id, type, reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(uuidv4(), req.params.id, req.user.id, type, reason || null, now, now);
     db.prepare(`UPDATE proofs SET ${type}_count = ${type}_count + 1 WHERE id = ?`).run(req.params.id);
     res.json({ success: true, action: 'added', type });
   } catch (e) {
@@ -426,9 +504,8 @@ router.delete('/:id/reactions/me', authenticate, (req, res) => {
 // ─── COMMENTS ────────────────────────────────────────────────────────────────
 router.get('/:id/comments', optionalAuth, (req, res) => {
   try {
-    const { sort = 'newest', parent_id = null } = req.query;
-    const orderMap = { newest: 'c.created_at DESC', useful: 'c.useful_count DESC' };
-    const order = orderMap[sort] || 'c.created_at DESC';
+    const { sort = 'newest', parent_id } = req.query;
+    const order = sort === 'useful' ? 'c.useful_count DESC' : 'c.created_at DESC';
 
     const comments = db.prepare(`
       SELECT c.id, c.proof_id, c.parent_id, c.body, c.status,
@@ -462,16 +539,17 @@ router.post('/:id/comments', authenticate, (req, res) => {
   try {
     const { body, parent_id } = req.body;
     if (!body || body.trim().length < 1) return res.status(400).json({ error: 'Comment body required' });
-    if (body.length > 2000) return res.status(400).json({ error: 'Comment too long (max 2000 chars)' });
+    if (body.length > 2000) return res.status(400).json({ error: 'Comment too long (max 2000 characters)' });
 
     const proof = db.prepare('SELECT id FROM proofs WHERE id = ? AND status = ?').get(req.params.id, 'active');
     if (!proof) return res.status(404).json({ error: 'Proof not found' });
 
     const id = uuidv4();
+    const now = new Date().toISOString();
     db.prepare(`
-      INSERT INTO proof_comments (id, proof_id, user_id, parent_id, body)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(id, req.params.id, req.user.id, parent_id || null, body.trim());
+      INSERT INTO proof_comments (id, proof_id, user_id, parent_id, body, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, req.params.id, req.user.id, parent_id || null, body.trim(), now, now);
 
     db.prepare('UPDATE proofs SET comment_count = comment_count + 1 WHERE id = ?').run(req.params.id);
 
@@ -502,67 +580,16 @@ router.delete('/comments/:commentId', authenticate, (req, res) => {
 router.post('/comments/:commentId/reactions', authenticate, (req, res) => {
   try {
     const existing = db.prepare('SELECT id FROM comment_reactions WHERE comment_id = ? AND user_id = ?').get(req.params.commentId, req.user.id);
+    const now = new Date().toISOString();
     if (existing) {
       db.prepare('DELETE FROM comment_reactions WHERE comment_id = ? AND user_id = ?').run(req.params.commentId, req.user.id);
       db.prepare('UPDATE proof_comments SET useful_count = MAX(0, useful_count - 1) WHERE id = ?').run(req.params.commentId);
       return res.json({ success: true, action: 'removed' });
     }
-    db.prepare('INSERT INTO comment_reactions (id, comment_id, user_id, type) VALUES (?, ?, ?, ?)').run(uuidv4(), req.params.commentId, req.user.id, 'useful');
+    db.prepare('INSERT INTO comment_reactions (id, comment_id, user_id, type, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(uuidv4(), req.params.commentId, req.user.id, 'useful', now);
     db.prepare('UPDATE proof_comments SET useful_count = useful_count + 1 WHERE id = ?').run(req.params.commentId);
     res.json({ success: true, action: 'added' });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ─── COMMUNITY FLAGS ──────────────────────────────────────────────────────────
-router.get('/:id/community-status', (req, res) => {
-  try {
-    const proof = db.prepare('SELECT id, community_status, flag_count, useful_count, question_count, comment_count FROM proofs WHERE id = ?').get(req.params.id);
-    if (!proof) return res.status(404).json({ error: 'Not found' });
-    res.json(proof);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ─── REPORT / FLAG ────────────────────────────────────────────────────────────
-router.post('/:id/report', (req, res) => {
-  try {
-    const { reason, details } = req.body;
-    if (!reason) return res.status(400).json({ error: 'Reason required' });
-    db.prepare('INSERT INTO reports (id, proof_id, reason, details, reporter_ip) VALUES (?, ?, ?, ?, ?)')
-      .run(uuidv4(), req.params.id, reason, details || null, req.ip);
-    res.json({ success: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ─── VERIFY STORAGE ───────────────────────────────────────────────────────────
-router.post('/:id/verify-storage', optionalAuth, async (req, res) => {
-  try {
-    const proof = db.prepare('SELECT * FROM proofs WHERE id = ? AND status = ?').get(req.params.id, 'active');
-    if (!proof) return res.status(404).json({ error: 'Not found' });
-
-    const blobId = proof.shelby_blob_id || `local://${proof.file_path}`;
-    const meta = await storage.getBlobMetadata({ shelbyBlobId: blobId });
-    res.json({ available: meta.exists, storageProvider: proof.storage_provider, shelbyBlobId: proof.shelby_blob_id });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ─── USER'S OWN PROOFS ────────────────────────────────────────────────────────
-router.get('/user/mine', authenticate, (req, res) => {
-  try {
-    const proofs = db.prepare(`
-      SELECT id, title, file_name, file_type, file_size, visibility, status,
-             view_count, created_at, category, tags, useful_count, question_count, comment_count, community_status
-      FROM proofs WHERE owner_id = ? AND status != 'removed_from_app'
-      ORDER BY created_at DESC
-    `).all(req.user.id);
-    res.json(proofs.map(p => ({ ...p, tags: JSON.parse(p.tags || '[]') })));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

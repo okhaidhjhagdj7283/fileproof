@@ -5,7 +5,7 @@ echo "=== FileProof Install Script ==="
 echo ""
 
 if ! command -v node &> /dev/null; then
-  echo "Cài Node.js..."
+  echo "Installing Node.js 20..."
   curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
   apt-get install -y nodejs
 fi
@@ -15,24 +15,30 @@ echo ""
 
 cd /root/fileproof
 
-echo "Cài dependencies..."
+echo "Installing dependencies..."
 npm install
 
 mkdir -p uploads database
 
+if [ ! -f .env ]; then
+  cp .env.example .env
+  echo ""
+  echo "⚠️  Created .env from .env.example"
+  echo "   Edit .env and set JWT_SECRET before starting."
+fi
+
 echo ""
-echo "=== Cài đặt xong! ==="
+echo "=== Install complete ==="
 echo ""
-echo "Chạy app:"
-echo "  cd /root/fileproof"
-echo "  node server.js"
+echo "Edit .env:"
+echo "  nano /root/fileproof/.env"
 echo ""
-echo "Hoặc chạy nền:"
-echo "  nohup node server.js > /root/fileproof/app.log 2>&1 &"
+echo "Run app:"
+echo "  cd /root/fileproof && node server.js"
 echo ""
-echo "Cài pm2 để quản lý process:"
+echo "Or with pm2:"
 echo "  npm install -g pm2"
 echo "  pm2 start server.js --name fileproof"
 echo "  pm2 save && pm2 startup"
 echo ""
-echo "App chạy tại: http://localhost:3000"
+echo "App runs at: http://localhost:3000"

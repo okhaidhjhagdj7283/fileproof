@@ -1,418 +1,357 @@
-let proof = null;
-const proofId = new URLSearchParams(location.search).get('id');
+// ─── FileProof Proof Page ─────────────────────────────────────────────────────
+
+const params = new URLSearchParams(window.location.search);
+const PROOF_ID = params.get('id');
+
+async function hashFileSHA256(file) {
+  const buffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return '—';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+function formatDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+function shortHash(h) {
+  return h ? h.slice(0, 16) + '...' + h.slice(-8) : '—';
+}
+
+function authHeaders() {
+  const token = localStorage.getItem('fp_token');
+  const h = { 'Content-Type': 'application/json' };
+  if (token) h['Authorization'] = `Bearer ${token}`;
+  return h;
+}
+
+// ─── Media viewer ─────────────────────────────────────────────────────────────
+
+function renderMedia(proof) {
+  const container = document.getElementById('fp-media-viewer');
+  if (!container || !proof.download_url) return;
+
+  const url = proof.download_url;
+  let html = '';
+
+  if (proof.file_type?.startsWith('image/')) {
+    html = `<img src="${url}" alt="${proof.file_name}" style="max-width:100%;max-height:480px;border-radius:8px;display:block;margin:0 auto">`;
+  } else if (proof.file_type?.startsWith('video/')) {
+    html = `<video controls style="max-width:100%;max-height:480px;border-radius:8px;display:block;margin:0 auto"><source src="${url}" type="${proof.file_type}">Your browser doesn't support video.</video>`;
+  } else if (proof.file_type?.startsWith('audio/')) {
+    html = `<audio controls style="width:100%"><source src="${url}" type="${proof.file_type}">Your browser doesn't support audio.</audio>`;
+  } else if (proof.file_type === 'application/pdf') {
+    html = `<iframe src="${url}" style="width:100%;height:480px;border:none;border-radius:8px"></iframe>`;
+  } else {
+    html = `<div class="fp-no-preview"><i class="ti ti-file" style="font-size:48px;color:var(--muted)"></i><p style="margin-top:12px;color:var(--muted)">No preview available for this file type</p><p class="text-muted text-sm">${proof.file_type || 'unknown type'}</p></div>`;
+  }
+
+  container.innerHTML = html;
+}
+
+// ─── Community warning ────────────────────────────────────────────────────────
+
+function renderCommunityWarning(proof) {
+  const el = document.getElementById('fp-community-warning');
+  if (!el) return;
+
+  if (proof.community_status === 'community_flagged' || proof.community_status === 'sensitive') {
+    el.innerHTML = `
+      <div class="community-warning">
+        <strong>Community warning</strong>
+        <p>This proof has been flagged by multiple users. The file fingerprint is still verifiable, but the metadata or context may be disputed.</p>
+        <div style="display:flex;gap:16px;margin-top:8px">
+          <span>File verification: <strong id="fp-verify-badge">Available</strong></span>
+          <span>Community status: <strong>${proof.community_status === 'sensitive' ? 'Questioned' : 'Flagged'}</strong></span>
+        </div>
+      </div>
+    `;
+    el.style.display = 'block';
+  }
+}
+
+// ─── Verify displayed file (backend hash) ─────────────────────────────────────
+
+async function verifyStorage() {
+  const btn = document.getElementById('fp-verify-storage-btn');
+  const result = document.getElementById('fp-verify-result');
+  if (btn) btn.disabled = true;
+  if (result) result.innerHTML = '<span class="text-muted">Verifying...</span>';
+
+  try {
+    const res = await fetch(`/api/proofs/${PROOF_ID}/verify-storage`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    const data = await res.json();
+
+    if (data.match) {
+      result.innerHTML = `
+        <div class="verify-result verify-result--success">
+          <i class="ti ti-circle-check"></i>
+          <strong>Verified.</strong>
+          <p>The file served from storage matches the original proof record.</p>
+          <div class="hash-compare">
+            <div><span class="text-muted">Stored hash:</span> <code>${data.storedHash}</code></div>
+            <div><span class="text-muted">Storage hash:</span> <code>${data.storageHash}</code></div>
+          </div>
+        </div>
+      `;
+    } else {
+      result.innerHTML = `
+        <div class="verify-result verify-result--fail">
+          <i class="ti ti-alert-triangle"></i>
+          <strong>Warning.</strong>
+          <p>The file served from storage does not match the original proof record.</p>
+        </div>
+      `;
+    }
+  } catch (e) {
+    result.innerHTML = `<div class="verify-result verify-result--fail"><strong>Error:</strong> ${e.message}</div>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ─── Upload file to compare (client-side hash) ────────────────────────────────
+
+async function compareFile(file, proofHash) {
+  const result = document.getElementById('fp-compare-result');
+  if (result) result.innerHTML = '<span class="text-muted">Hashing your file...</span>';
+
+  try {
+    const hash = await hashFileSHA256(file);
+    if (hash === proofHash) {
+      result.innerHTML = `
+        <div class="verify-result verify-result--success">
+          <i class="ti ti-circle-check"></i>
+          <strong>Match.</strong>
+          <p>Your file is identical to the preserved original.</p>
+          <code style="font-size:11px;word-break:break-all">${hash}</code>
+        </div>
+      `;
+    } else {
+      result.innerHTML = `
+        <div class="verify-result verify-result--fail">
+          <i class="ti ti-alert-triangle"></i>
+          <strong>Not a match.</strong>
+          <p>Your file may have been edited, compressed, cropped, or replaced.</p>
+          <div class="hash-compare">
+            <div><span class="text-muted">Original:</span> <code>${proofHash}</code></div>
+            <div><span class="text-muted">Your file:</span> <code>${hash}</code></div>
+          </div>
+        </div>
+      `;
+    }
+  } catch (e) {
+    result.innerHTML = `<div class="verify-result verify-result--fail"><strong>Error hashing file:</strong> ${e.message}</div>`;
+  }
+}
+
+// ─── Load proof ───────────────────────────────────────────────────────────────
 
 async function loadProof() {
-  if (!proofId) { document.getElementById('proof-error').style.display = ''; return; }
+  if (!PROOF_ID) {
+    document.getElementById('fp-proof-container').innerHTML = '<p class="text-muted">No proof ID specified.</p>';
+    return;
+  }
+
   try {
-    proof = await api(`/proofs/${proofId}`);
-    renderProof();
-    loadComments();
+    const res = await fetch(`/api/proofs/${PROOF_ID}`, { headers: authHeaders() });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      document.getElementById('fp-proof-container').innerHTML = `<p class="text-muted">${e.error || 'Proof not found'}</p>`;
+      return;
+    }
+
+    const proof = await res.json();
+
+    document.title = `${proof.title} — FileProof`;
+
+    // Header
+    document.getElementById('fp-proof-title').textContent = proof.title;
+    document.getElementById('fp-proof-date').textContent = `Preserved on ${new Date(proof.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}`;
+    document.getElementById('fp-proof-submitter').textContent = `Submitted by ${proof.submitter_type === 'account' ? (proof.owner_name || 'Account user') : proof.submitter_type === 'wallet' ? (proof.wallet_address ? proof.wallet_address.slice(0,6)+'...'+proof.wallet_address.slice(-4) : 'Wallet user') : 'Anonymous'}`;
+
+    // Proof details
+    document.getElementById('fp-file-name').textContent = proof.file_name;
+    document.getElementById('fp-file-type').textContent = proof.file_type;
+    document.getElementById('fp-file-size').textContent = formatBytes(proof.file_size);
+    document.getElementById('fp-storage-provider').textContent = proof.storage_provider || 'shelby';
+    document.getElementById('fp-created-at').textContent = formatDate(proof.created_at);
+    document.getElementById('fp-visibility').textContent = proof.visibility;
+
+    // Technical details
+    document.getElementById('fp-sha256').textContent = proof.sha256_hash;
+    document.getElementById('fp-blob-id').textContent = proof.shelby_blob_id || '—';
+    document.getElementById('fp-proof-id').textContent = proof.id;
+
+    // Tags
+    if (proof.tags?.length) {
+      document.getElementById('fp-tags').innerHTML = proof.tags.map(t => `<span class="tag">${t}</span>`).join('');
+    }
+
+    // Community warning
+    renderCommunityWarning(proof);
+
+    // Media viewer
+    renderMedia(proof);
+
+    // Download button
+    const dlBtn = document.getElementById('fp-download-btn');
+    if (dlBtn) dlBtn.href = `/api/proofs/${PROOF_ID}/download`;
+
+    // Copy link
+    document.getElementById('fp-copy-link-btn')?.addEventListener('click', () => {
+      navigator.clipboard.writeText(window.location.href);
+      const btn = document.getElementById('fp-copy-link-btn');
+      btn.textContent = 'Copied!';
+      setTimeout(() => btn.textContent = 'Copy link', 1500);
+    });
+
+    // Verify storage button
+    document.getElementById('fp-verify-storage-btn')?.addEventListener('click', verifyStorage);
+
+    // Compare file input
+    const compareInput = document.getElementById('fp-compare-input');
+    compareInput?.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) compareFile(file, proof.sha256_hash);
+    });
+
+    // Reactions
+    loadReactions(proof);
+
+    // Flag button
+    document.getElementById('fp-flag-btn')?.addEventListener('click', () => {
+      const reason = prompt('Flag reason:\nspam | personal_info | illegal_content | harassment | copyright | misleading_metadata | sensitive_content | other');
+      if (!reason) return;
+      flagProof(PROOF_ID, reason);
+    });
+
+    // Comments
+    loadComments(proof.id);
+
   } catch (e) {
-    document.getElementById('proof-error').style.display = '';
-    document.getElementById('proof-error').textContent = e.message || 'Proof not found.';
-    document.getElementById('proof-loading').style.display = 'none';
-  }
-}
-
-function renderProof() {
-  document.getElementById('proof-loading').style.display = 'none';
-  document.getElementById('proof-content').style.display = '';
-
-  // Title & header
-  document.getElementById('proof-title').textContent = proof.title;
-  document.title = `${proof.title} — FileProof`;
-
-  const tags = Array.isArray(proof.tags) ? proof.tags : JSON.parse(proof.tags || '[]');
-
-  // Community warning
-  const warningEl = document.getElementById('community-warning');
-  if (warningEl) warningEl.innerHTML = renderCommunityWarning(proof.community_status);
-
-  // Submitter
-  let submitterHtml = '';
-  if (proof.submitter_type === 'wallet' && proof.wallet_address) {
-    const addr = proof.wallet_address;
-    const short = addr.slice(0, 6) + '…' + addr.slice(-4);
-    const verified = proof.wallet_signature_verified ? '<span class="badge badge-green" style="margin-left:6px">Wallet Verified</span>' : '';
-    submitterHtml = `Submitted by <strong>${short}</strong>${verified}`;
-  } else if (proof.owner_name) {
-    submitterHtml = `Submitted by <strong>${escapeHtml(proof.owner_name)}</strong>`;
-  } else {
-    submitterHtml = `Submitted anonymously`;
-  }
-
-  document.getElementById('proof-submitter').innerHTML = submitterHtml;
-  document.getElementById('proof-date').textContent = `Preserved on ${formatDate(proof.created_at)}`;
-
-  // File verification status badge
-  const statusBadge = document.getElementById('proof-status-badge');
-  if (statusBadge) {
-    statusBadge.className = 'badge badge-green';
-    statusBadge.innerHTML = '<span class="badge-pip"></span> File preserved';
-  }
-
-  // Media viewer
-  renderMedia();
-
-  // Proof details
-  document.getElementById('detail-filename').textContent = proof.file_name;
-  document.getElementById('detail-filetype').textContent = proof.file_type;
-  document.getElementById('detail-filesize').textContent = formatBytes(proof.file_size);
-  document.getElementById('detail-created').textContent = formatDateTime(proof.created_at);
-  document.getElementById('detail-visibility').textContent = capitalize(proof.visibility);
-  document.getElementById('detail-storage').textContent = proof.storage_provider === 'shelby' ? 'Shelby' : 'Local storage';
-
-  if (proof.location_text) {
-    document.getElementById('detail-location-row').style.display = '';
-    document.getElementById('detail-location').textContent = proof.location_text;
-  }
-  if (proof.event_date) {
-    document.getElementById('detail-event-row').style.display = '';
-    document.getElementById('detail-event-date').textContent = formatDate(proof.event_date);
-  }
-  if (proof.category) {
-    document.getElementById('detail-category-row').style.display = '';
-    document.getElementById('detail-category').textContent = proof.category;
-  }
-
-  // Tags
-  if (tags.length) {
-    document.getElementById('proof-tags').innerHTML = tags.map(t =>
-      `<span class="tag">${escapeHtml(t)}</span>`).join('');
-  }
-
-  // Technical details
-  document.getElementById('tech-hash').textContent = proof.sha256_hash;
-  document.getElementById('tech-blob-id').textContent = proof.shelby_blob_id || 'N/A';
-  document.getElementById('tech-record-id').textContent = proof.id;
-
-  // Community counts
-  renderCounts();
-
-  // Own proof controls
-  const user = getUser();
-  if (user && proof.owner_id === user.id) {
-    document.getElementById('owner-controls').style.display = '';
-  }
-}
-
-function renderMedia() {
-  const container = document.getElementById('media-viewer');
-  if (!container || !proof) return;
-  const mime = proof.file_type;
-  const src = proof.download_url || `/api/proofs/${proof.id}/download`;
-
-  if (mime.startsWith('image/')) {
-    container.innerHTML = `<img src="${src}" alt="${escapeHtml(proof.file_name)}" style="max-width:100%;max-height:480px;object-fit:contain;border-radius:8px;">`;
-  } else if (mime.startsWith('video/')) {
-    container.innerHTML = `<video src="${src}" controls style="width:100%;max-height:480px;border-radius:8px;background:#000;"></video>`;
-  } else if (mime.startsWith('audio/')) {
-    container.innerHTML = `<div style="padding:24px 0;"><audio src="${src}" controls style="width:100%;"></audio></div>`;
-  } else if (mime === 'application/pdf') {
-    container.innerHTML = `<iframe src="${src}" style="width:100%;height:480px;border:none;border-radius:8px;"></iframe>`;
-  } else {
-    container.innerHTML = `
-      <div style="padding:40px;text-align:center;color:var(--muted);">
-        <div style="font-size:48px;">${fileIcon(mime)}</div>
-        <p style="margin-top:12px;">No preview available for this file type.</p>
-        <a href="${src}" download class="btn btn-secondary btn-sm" style="margin-top:12px;">Download to view</a>
-      </div>`;
-  }
-}
-
-function renderCounts() {
-  if (!proof) return;
-  document.getElementById('count-useful').textContent = proof.useful_count || 0;
-  document.getElementById('count-question').textContent = proof.question_count || 0;
-  document.getElementById('count-comments').textContent = proof.comment_count || 0;
-  document.getElementById('count-flags').textContent = proof.flag_count || 0;
-
-  const user = getUser();
-  if (user) {
-    const usefulBtn = document.getElementById('btn-useful');
-    const questionBtn = document.getElementById('btn-question');
-    if (usefulBtn) usefulBtn.classList.toggle('active', proof.my_reaction === 'useful');
-    if (questionBtn) questionBtn.classList.toggle('active', proof.my_reaction === 'question');
+    document.getElementById('fp-proof-container').innerHTML = `<p class="text-muted">Error loading proof: ${e.message}</p>`;
   }
 }
 
 // ─── Reactions ────────────────────────────────────────────────────────────────
-async function react(type) {
-  if (!getUser()) return (location.href = '/login.html');
-  try {
-    const result = await api(`/proofs/${proofId}/reactions`, {
-      method: 'POST',
-      body: JSON.stringify({ type }),
+
+async function loadReactions(proof) {
+  const res = await fetch(`/api/proofs/${PROOF_ID}/reactions/summary`, { headers: authHeaders() });
+  if (!res.ok) return;
+  const data = await res.json();
+
+  const usefulBtn = document.getElementById('fp-useful-btn');
+  const questionBtn = document.getElementById('fp-question-btn');
+
+  if (usefulBtn) {
+    usefulBtn.textContent = `Useful (${data.useful_count})`;
+    if (data.my_reaction === 'useful') usefulBtn.classList.add('active');
+    usefulBtn.addEventListener('click', async () => {
+      if (!FP.isLoggedIn()) { window.location.href = '/login.html'; return; }
+      await fetch(`/api/proofs/${PROOF_ID}/reactions`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ type: 'useful' }),
+      });
+      loadReactions(proof);
     });
-
-    // Refresh counts
-    const summary = await api(`/proofs/${proofId}/reactions/summary`);
-    proof.useful_count = summary.useful_count;
-    proof.question_count = summary.question_count;
-    proof.my_reaction = summary.my_reaction;
-    renderCounts();
-  } catch (e) {
-    console.error(e);
   }
-}
 
-// ─── Flag ─────────────────────────────────────────────────────────────────────
-function openFlagModal() {
-  if (!getUser()) return (location.href = '/login.html');
-  document.getElementById('flag-modal').style.display = 'flex';
-}
-
-function closeFlagModal() {
-  document.getElementById('flag-modal').style.display = 'none';
-}
-
-async function submitFlag() {
-  const reason = document.getElementById('flag-reason')?.value;
-  if (!reason) return;
-  try {
-    await api('/flags', {
-      method: 'POST',
-      body: JSON.stringify({ targetType: 'proof', targetId: proofId, reason }),
+  if (questionBtn) {
+    questionBtn.textContent = `Question (${data.question_count})`;
+    if (data.my_reaction === 'question') questionBtn.classList.add('active');
+    questionBtn.addEventListener('click', async () => {
+      if (!FP.isLoggedIn()) { window.location.href = '/login.html'; return; }
+      await fetch(`/api/proofs/${PROOF_ID}/reactions`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ type: 'question', reason: 'context_missing' }),
+      });
+      loadReactions(proof);
     });
-    closeFlagModal();
-    document.getElementById('flag-thanks').style.display = '';
-  } catch (e) {
-    alert(e.message);
   }
 }
 
-// ─── Verify ───────────────────────────────────────────────────────────────────
-async function verifyDisplayedFile() {
-  if (!proof) return;
-  const resultEl = document.getElementById('verify-result');
-  resultEl.innerHTML = '<span style="color:var(--muted)">Fetching file from storage and computing hash…</span>';
+// ─── Comments ────────────────────────────────────────────────────────────────
 
-  try {
-    const downloadUrl = proof.download_url || `/api/proofs/${proofId}/download`;
-    const response = await fetch(downloadUrl);
-    if (!response.ok) throw new Error('Could not fetch file from storage');
+async function loadComments(proofId) {
+  const res = await fetch(`/api/proofs/${proofId}/comments`);
+  if (!res.ok) return;
+  const comments = await res.json();
 
-    const blob = await response.blob();
-    const file = new File([blob], proof.file_name, { type: proof.file_type });
-    const hash = await sha256File(file);
+  const list = document.getElementById('fp-comments-list');
+  if (!list) return;
 
-    if (hash === proof.sha256_hash) {
-      resultEl.innerHTML = `
-        <div class="verify-result verify-success">
-          <div class="verify-result-icon">✓</div>
-          <div>
-            <strong>Verified.</strong>
-            <p>The file served from storage matches the original proof record.</p>
-            <p class="mono" style="font-size:11px;margin-top:6px;word-break:break-all;">${hash}</p>
-          </div>
-        </div>`;
-    } else {
-      resultEl.innerHTML = `
-        <div class="verify-result verify-fail">
-          <div class="verify-result-icon">✕</div>
-          <div>
-            <strong>Warning.</strong>
-            <p>The file served from storage does not match the original proof record.</p>
-          </div>
-        </div>`;
-    }
-  } catch (e) {
-    resultEl.innerHTML = `<div class="verify-result verify-fail"><span>Error: ${escapeHtml(e.message)}</span></div>`;
-  }
-}
-
-document.getElementById('verify-file-input')?.addEventListener('change', async e => {
-  const file = e.target.files[0];
-  if (!file || !proof) return;
-  const resultEl = document.getElementById('verify-result');
-  resultEl.innerHTML = '<span style="color:var(--muted)">Computing file fingerprint…</span>';
-  try {
-    const hash = await sha256File(file);
-    if (hash === proof.sha256_hash) {
-      resultEl.innerHTML = `
-        <div class="verify-result verify-success">
-          <div class="verify-result-icon">✓</div>
-          <div>
-            <strong>Match.</strong>
-            <p>Your file is identical to the preserved original.</p>
-            <p class="mono" style="font-size:11px;margin-top:6px;word-break:break-all;">${hash}</p>
-          </div>
-        </div>`;
-    } else {
-      resultEl.innerHTML = `
-        <div class="verify-result verify-fail">
-          <div class="verify-result-icon">✕</div>
-          <div>
-            <strong>Not a match.</strong>
-            <p>Your file may have been edited, compressed, cropped, or replaced.</p>
-          </div>
-        </div>`;
-    }
-  } catch (err) {
-    resultEl.innerHTML = `<div class="verify-result verify-fail"><span>Error computing hash: ${escapeHtml(err.message)}</span></div>`;
-  }
-});
-
-// ─── Comments ─────────────────────────────────────────────────────────────────
-let commentSort = 'newest';
-
-async function loadComments() {
-  try {
-    const comments = await api(`/proofs/${proofId}/comments?sort=${commentSort}`);
-    renderComments(comments);
-  } catch {}
-}
-
-function renderComments(comments) {
-  const container = document.getElementById('comments-list');
-  if (!container) return;
   if (!comments.length) {
-    container.innerHTML = '<p style="color:var(--muted);font-size:14px;">No comments yet. Be the first to add context.</p>';
+    list.innerHTML = '<p class="text-muted text-sm">No comments yet. Be the first to add context.</p>';
     return;
   }
-  container.innerHTML = comments.map(renderComment).join('');
-}
 
-function renderComment(c) {
-  const collapsed = c.collapsed;
-  const body = collapsed
-    ? `<div class="comment-collapsed">This comment is hidden by community filters. <button class="btn-link" onclick="showComment('${c.id}')">Show anyway</button></div>`
-    : `<div class="comment-body">${escapeHtml(c.body)}</div>`;
-
-  const user = getUser();
-  const isOwn = user && c.author_id === user.id;
-  const walletBadge = c.wallet_address ? `<span class="badge badge-gray" style="margin-left:6px">Wallet</span>` : '';
-
-  return `
-    <div class="comment" id="comment-${c.id}">
+  list.innerHTML = comments.map(c => `
+    <div class="comment ${c.collapsed ? 'comment--collapsed' : ''}">
       <div class="comment-header">
-        <strong>${escapeHtml(c.author_name || 'Anonymous')}</strong>${walletBadge}
-        <span class="comment-time" style="margin-left:8px;font-size:12px;color:var(--muted)">${timeAgo(c.created_at)}</span>
-        ${isOwn ? `<button class="btn-link danger" onclick="deleteComment('${c.id}')" style="margin-left:auto">Delete</button>` : `<button class="btn-link" onclick="flagComment('${c.id}')" style="margin-left:auto;font-size:12px;color:var(--muted)">Flag</button>`}
+        <strong>${c.author_name || 'Anonymous'}</strong>
+        <span class="text-muted text-sm">${new Date(c.created_at).toLocaleDateString()}</span>
+        ${c.collapsed ? '<span class="badge badge-warn">Community flagged</span>' : ''}
       </div>
-      ${body}
-      <div class="comment-actions">
-        <button class="btn-link ${c.my_reaction === 'useful' ? 'active' : ''}" onclick="likeComment('${c.id}')">
-          ↑ Useful ${c.useful_count > 0 ? `(${c.useful_count})` : ''}
-        </button>
-        <button class="btn-link" onclick="toggleReply('${c.id}')">Reply</button>
-      </div>
-      <div id="reply-box-${c.id}" style="display:none;margin-top:8px;"></div>
+      <div class="comment-body">${c.collapsed ? '[Collapsed — flagged by community]' : c.body}</div>
     </div>
-  `;
+  `).join('');
 }
 
-function showComment(commentId) {
-  const el = document.querySelector(`#comment-${commentId} .comment-collapsed`);
-  if (el) el.innerHTML = ''; // Let content show
-}
-
-async function submitComment() {
-  const user = getUser();
-  if (!user) return (location.href = '/login.html');
-  const textarea = document.getElementById('comment-input');
-  const body = textarea?.value?.trim();
-  if (!body) return;
-  try {
-    await api(`/proofs/${proofId}/comments`, {
-      method: 'POST',
-      body: JSON.stringify({ body }),
-    });
-    textarea.value = '';
-    proof.comment_count = (proof.comment_count || 0) + 1;
-    document.getElementById('count-comments').textContent = proof.comment_count;
-    loadComments();
-  } catch (e) {
-    alert(e.message);
-  }
-}
-
-async function deleteComment(commentId) {
-  if (!confirm('Delete this comment?')) return;
-  try {
-    await api(`/proofs/comments/${commentId}`, { method: 'DELETE' });
-    loadComments();
-  } catch (e) { alert(e.message); }
-}
-
-async function likeComment(commentId) {
-  if (!getUser()) return (location.href = '/login.html');
-  try {
-    await api(`/proofs/comments/${commentId}/reactions`, { method: 'POST', body: JSON.stringify({ type: 'useful' }) });
-    loadComments();
-  } catch {}
-}
-
-async function flagComment(commentId) {
-  if (!getUser()) return (location.href = '/login.html');
-  const reason = prompt('Flag this comment as:\nspam / personal_info / harassment / other');
-  if (!reason) return;
-  try {
-    await api('/flags', { method: 'POST', body: JSON.stringify({ targetType: 'comment', targetId: commentId, reason }) });
-    loadComments();
-  } catch (e) { alert(e.message); }
-}
-
-function toggleReply(commentId) {
-  const box = document.getElementById(`reply-box-${commentId}`);
-  if (!box) return;
-  if (box.style.display === 'none') {
-    box.style.display = '';
-    box.innerHTML = `
-      <textarea placeholder="Write a reply…" id="reply-input-${commentId}" style="width:100%;min-height:60px;resize:vertical;font-size:13px;padding:8px;border:1px solid var(--border-md);border-radius:6px;font-family:inherit;"></textarea>
-      <div style="margin-top:6px;display:flex;gap:8px;">
-        <button class="btn btn-primary btn-sm" onclick="submitReply('${commentId}')">Reply</button>
-        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('reply-box-${commentId}').style.display='none'">Cancel</button>
-      </div>`;
-    document.getElementById(`reply-input-${commentId}`)?.focus();
-  } else {
-    box.style.display = 'none';
-  }
-}
-
-async function submitReply(parentId) {
-  if (!getUser()) return (location.href = '/login.html');
-  const input = document.getElementById(`reply-input-${parentId}`);
+async function postComment() {
+  if (!FP.isLoggedIn()) { window.location.href = '/login.html'; return; }
+  const input = document.getElementById('fp-comment-input');
   const body = input?.value?.trim();
   if (!body) return;
-  try {
-    await api(`/proofs/${proofId}/comments`, {
-      method: 'POST',
-      body: JSON.stringify({ body, parent_id: parentId }),
-    });
-    loadComments();
-  } catch (e) { alert(e.message); }
-}
 
-function setSortComments(sort) {
-  commentSort = sort;
-  document.querySelectorAll('.sort-btn').forEach(b => b.classList.toggle('active', b.dataset.sort === sort));
-  loadComments();
-}
-
-// ─── Misc ─────────────────────────────────────────────────────────────────────
-function copyProofLink() {
-  navigator.clipboard.writeText(location.href).then(() => {
-    const btn = document.querySelector('[onclick="copyProofLink()"]');
-    if (btn) { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy link', 2000); }
+  const res = await fetch(`/api/proofs/${PROOF_ID}/comments`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ body }),
   });
-}
 
-function toggleTechDetails() {
-  const el = document.getElementById('tech-details');
-  const btn = document.getElementById('tech-toggle');
-  if (el.style.display === 'none') {
-    el.style.display = '';
-    if (btn) btn.textContent = 'Hide technical details';
-  } else {
-    el.style.display = 'none';
-    if (btn) btn.textContent = 'Show technical details';
+  if (res.ok) {
+    input.value = '';
+    loadComments(PROOF_ID);
   }
 }
 
-function capitalize(str) {
-  if (!str) return '';
-  return str.charAt(0).toUpperCase() + str.slice(1);
+async function flagProof(proofId, reason) {
+  if (!FP.isLoggedIn()) { window.location.href = '/login.html'; return; }
+  const validReasons = ['spam','personal_info','illegal_content','harassment','copyright','misleading_metadata','sensitive_content','other'];
+  if (!validReasons.includes(reason)) { alert('Invalid reason'); return; }
+
+  const res = await fetch('/api/flags', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ targetType: 'proof', targetId: proofId, reason }),
+  });
+  const data = await res.json();
+  alert(data.message || 'Flagged.');
 }
 
-document.addEventListener('DOMContentLoaded', loadProof);
+// ─── Init ─────────────────────────────────────────────────────────────────────
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadProof();
+
+  document.getElementById('fp-post-comment-btn')?.addEventListener('click', postComment);
+
+  document.getElementById('fp-comment-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) postComment();
+  });
+});

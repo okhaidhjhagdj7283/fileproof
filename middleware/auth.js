@@ -1,21 +1,23 @@
 const jwt = require('jsonwebtoken');
+const config = require('../config/env');
 
 const authenticate = (req, res, next) => {
-  const token = req.headers.authorization?.replace('Bearer ', '') ||
-                req.cookies?.token;
-  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return res.status(401).json({ error: 'Unauthorized — token required' });
   try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = jwt.verify(token, config.jwtSecret);
     next();
   } catch {
-    res.status(401).json({ error: 'Invalid token' });
+    res.status(401).json({ error: 'Invalid or expired token' });
   }
 };
 
 const optionalAuth = (req, res, next) => {
-  const token = req.headers.authorization?.replace('Bearer ', '');
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (token) {
-    try { req.user = jwt.verify(token, process.env.JWT_SECRET); } catch {}
+    try { req.user = jwt.verify(token, config.jwtSecret); } catch {}
   }
   next();
 };
